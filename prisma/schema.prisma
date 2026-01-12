@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model GlobalSettings {
+  id               Int    @id @default(1)
+  makeupWindowDays Int    @default(30)
+  cutoffTime       String @default("16:00")
+}
+
+model ClassSlot {
+  id                    String   @id
+  date                  DateTime
+  startTime             String
+  courseLabel           String
+  classBand             String
+  capacityLimit         Int
+  capacityCurrent       Int
+  capacityMakeupUsed    Int      @default(0)
+  waitlistCount         Int      @default(0)
+  lessonStartDateTime   DateTime
+  lastNotifiedRequestId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model Absence {
+  id                String   @id
+  childName         String
+  declaredClassBand String
+  absentDate        DateTime
+  originalSlotId    String
+  contactEmail      String?
+  resumeToken       String   @unique
+  makeupDeadline    DateTime
+  makeupStatus      String   @default("PENDING") // PENDING, MAKEUP_CONFIRMED, EXPIRED
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([resumeToken])
+  @@index([makeupStatus])
+  @@index([originalSlotId])
+}
+
+model Request {
+  id                   String   @id
+  absenceId            String?
+  childName            String
+  declaredClassBand    String
+  absentDate           DateTime
+  toSlotId             String
+  status               String
+  contactEmail         String?
+  confirmToken         String?
+  declineToken         String?
+  cancelToken          String?
+  toSlotStartDateTime  DateTime
+  createdAt            DateTime @default(now())
+
+  @@index([toSlotId])
+  @@index([status])
+  @@index([absenceId])
+}
