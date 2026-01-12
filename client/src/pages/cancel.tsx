@@ -23,7 +23,7 @@ export default function CancelPage() {
     const fetchRequestInfo = async () => {
       try {
         const response = await fetch(`/api/cancel/${token}/info`);
-        
+
         if (!response.ok) {
           const errorData = await response.json();
           throw new Error(errorData.error || "情報の取得に失敗しました。");
@@ -49,7 +49,7 @@ export default function CancelPage() {
       const response = await fetch(`/api/cancel/${token}`, {
         method: "POST",
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || "キャンセルに失敗しました。");
@@ -99,7 +99,7 @@ export default function CancelPage() {
               <div className="bg-muted/50 rounded-lg p-4 space-y-2">
                 <p className="text-sm text-muted-foreground">お子様名</p>
                 <p className="font-semibold text-lg">{requestInfo.childName}</p>
-                
+
                 <p className="text-sm text-muted-foreground mt-4">振替予約</p>
                 <p className="font-semibold">
                   {requestInfo.date} {requestInfo.startTime}
@@ -113,7 +113,6 @@ export default function CancelPage() {
                 </p>
                 <p className="text-sm text-amber-800 dark:text-amber-300 mt-2">
                   この振替予約をキャンセルしてもよろしいですか？
-                  キャンセルすると、次の順番待ちの方に自動的にご案内されます。
                 </p>
               </div>
 
@@ -144,9 +143,6 @@ export default function CancelPage() {
             <>
               <p className="text-center text-lg">
                 <strong>{requestInfo.childName}</strong> さんの振替予約をキャンセルしました。
-              </p>
-              <p className="text-center text-muted-foreground">
-                空き枠が発生したため、次の順番待ちの方に自動的にご案内いたします。
               </p>
               <Button
                 onClick={() => setLocation("/")}

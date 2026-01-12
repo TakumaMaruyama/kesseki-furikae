@@ -33,13 +33,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { 
-  UserIcon, 
-  UsersIcon, 
-  CalendarIcon, 
-  ClockIcon, 
-  CheckCircleIcon, 
-  XCircleIcon, 
+import {
+  UserIcon,
+  UsersIcon,
+  CalendarIcon,
+  ClockIcon,
+  CheckCircleIcon,
+  XCircleIcon,
   AlertTriangleIcon,
   PlusIcon,
   Loader2,
@@ -72,7 +72,6 @@ function StatusBadge({ status }: { status: string }) {
     "MAKEUP_CONFIRMED": { variant: "default", label: "振替確定" },
     "EXPIRED": { variant: "destructive", label: "期限切れ" },
     "確定": { variant: "default", label: "確定" },
-    "待ち": { variant: "secondary", label: "順番待ち" },
     "却下": { variant: "destructive", label: "キャンセル済" },
     "期限切れ": { variant: "destructive", label: "期限切れ" },
   };
@@ -86,18 +85,17 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function DashboardSummary({ 
-  children, 
-  absences, 
-  requests 
-}: { 
+function DashboardSummary({
+  children,
+  absences,
+  requests
+}: {
   children: Child[];
   absences: Absence[];
   requests: MakeupRequest[];
 }) {
   const pendingAbsences = absences.filter(a => a.makeupStatus === "PENDING").length;
   const confirmedMakeups = requests.filter(r => r.status === "確定").length;
-  const waitingRequests = requests.filter(r => r.status === "待ち").length;
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -150,8 +148,8 @@ function DashboardSummary({
               <ClockIcon className="w-5 h-5 text-blue-600 dark:text-blue-500" />
             </div>
             <div>
-              <p className="text-2xl font-bold" data-testid="text-waiting-count">{waitingRequests}</p>
-              <p className="text-xs text-muted-foreground">順番待ち</p>
+              <p className="text-2xl font-bold" data-testid="text-waiting-count">{requests.length}</p>
+              <p className="text-xs text-muted-foreground">全予約数</p>
             </div>
           </div>
         </CardContent>
@@ -198,8 +196,8 @@ function ChildrenSection({ children, courses }: { children: Child[]; courses: Co
             {children.map((child) => {
               const course = getCourse(child.courseId);
               return (
-                <div 
-                  key={child.id} 
+                <div
+                  key={child.id}
                   className="flex items-center justify-between p-3 rounded-lg border"
                   data-testid={`card-child-summary-${child.id}`}
                 >
@@ -233,14 +231,14 @@ function ChildrenSection({ children, courses }: { children: Child[]; courses: Co
   );
 }
 
-function AbsenceHistorySection({ 
-  absences, 
+function AbsenceHistorySection({
+  absences,
   requests,
   onCancelAbsence,
   onCancelRequest,
   isCancellingAbsence,
   isCancellingRequest
-}: { 
+}: {
   absences: Absence[];
   requests: MakeupRequest[];
   onCancelAbsence: (absenceId: string) => void;
@@ -248,7 +246,7 @@ function AbsenceHistorySection({
   isCancellingAbsence: boolean;
   isCancellingRequest: boolean;
 }) {
-  const sortedAbsences = [...absences].sort((a, b) => 
+  const sortedAbsences = [...absences].sort((a, b) =>
     new Date(b.absentDate).getTime() - new Date(a.absentDate).getTime()
   );
 
@@ -267,7 +265,7 @@ function AbsenceHistorySection({
 
   // 振替予約がキャンセル可能かどうか
   const canCancelRequest = (request: MakeupRequest) => {
-    if (request.status !== "確定" && request.status !== "待ち") return false;
+    if (request.status !== "確定") return false;
     const slotTime = parseDbDateTime(request.toSlotStartDateTime);
     const now = new Date();
     return slotTime > now;
@@ -299,11 +297,11 @@ function AbsenceHistorySection({
           <div className="space-y-4">
             {sortedAbsences.map((absence) => {
               const relatedRequests = getRelatedRequests(absence.id);
-              const activeRequest = relatedRequests.find(r => r.status === "確定" || r.status === "待ち");
-              
+              const activeRequest = relatedRequests.find(r => r.status === "確定");
+
               return (
-                <div 
-                  key={absence.id} 
+                <div
+                  key={absence.id}
                   className="p-4 rounded-lg border"
                   data-testid={`card-absence-${absence.id}`}
                 >
@@ -326,15 +324,13 @@ function AbsenceHistorySection({
                     </div>
                   </div>
 
-                  {/* 振替予約情報（確定または順番待ちがある場合） */}
+                  {/* 振替予約情報（確定がある場合） */}
                   {activeRequest && (
                     <div className="mt-3 p-3 rounded-md bg-muted/50 border border-muted">
                       <div className="flex items-start justify-between gap-3 flex-wrap">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1 flex-wrap">
-                            <span className="text-sm font-medium">
-                              {activeRequest.status === "確定" ? "振替先:" : "順番待ち中:"}
-                            </span>
+                            <span className="text-sm font-medium">振替先:</span>
                             <StatusBadge status={activeRequest.status} />
                           </div>
                           <p className="text-sm">
@@ -344,9 +340,9 @@ function AbsenceHistorySection({
                         {canCancelRequest(activeRequest) && (
                           <AlertDialog>
                             <AlertDialogTrigger asChild>
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
+                              <Button
+                                variant="ghost"
+                                size="sm"
                                 className="text-destructive hover:text-destructive shrink-0"
                                 disabled={isCancellingRequest}
                                 data-testid={`button-cancel-request-${activeRequest.id}`}
@@ -360,11 +356,6 @@ function AbsenceHistorySection({
                                 <AlertDialogTitle>振替予約をキャンセル</AlertDialogTitle>
                                 <AlertDialogDescription>
                                   {activeRequest.childName}さんの{format(parseDbDateTime(activeRequest.toSlotStartDateTime), "M月d日(E) HH:mm", { locale: ja })}の振替予約をキャンセルしますか？
-                                  {activeRequest.status === "確定" && (
-                                    <span className="block mt-2 text-yellow-600 dark:text-yellow-500">
-                                      確定済みの予約をキャンセルすると、順番待ちの方に枠が回ります。
-                                    </span>
-                                  )}
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
@@ -394,13 +385,13 @@ function AbsenceHistorySection({
                         </Button>
                       </Link>
                     )}
-                    
+
                     {canCancelAbsence(absence) && (
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
-                          <Button 
-                            variant="ghost" 
-                            size="sm" 
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             className="text-destructive hover:text-destructive"
                             disabled={isCancellingAbsence}
                             data-testid={`button-cancel-absence-${absence.id}`}
@@ -445,7 +436,7 @@ function AbsenceHistorySection({
   );
 }
 
-function RequestHistorySection({ requests, onCancel, isCancelling }: { 
+function RequestHistorySection({ requests, onCancel, isCancelling }: {
   requests: MakeupRequest[];
   onCancel: (requestId: string) => void;
   isCancelling: boolean;
@@ -459,11 +450,11 @@ function RequestHistorySection({ requests, onCancel, isCancelling }: {
     return timeB - timeA;
   });
 
-  const activeRequests = sortedRequests.filter(r => r.status === "確定" || r.status === "待ち");
-  const pastRequests = sortedRequests.filter(r => r.status !== "確定" && r.status !== "待ち");
+  const activeRequests = sortedRequests.filter(r => r.status === "確定");
+  const pastRequests = sortedRequests.filter(r => r.status !== "確定");
 
   const canCancel = (request: MakeupRequest) => {
-    if (request.status !== "確定" && request.status !== "待ち") return false;
+    if (request.status !== "確定") return false;
     const parsed = parseSlotId(request.toSlotId);
     if (!parsed) return false;
     const slotTime = new Date(`${parsed.date}T${parsed.startTime}:00`);
@@ -472,8 +463,8 @@ function RequestHistorySection({ requests, onCancel, isCancelling }: {
   };
 
   const renderRequest = (request: MakeupRequest) => (
-    <div 
-      key={request.id} 
+    <div
+      key={request.id}
       className="flex items-start justify-between p-3 rounded-lg border gap-3"
       data-testid={`card-request-${request.id}`}
     >
@@ -495,9 +486,9 @@ function RequestHistorySection({ requests, onCancel, isCancelling }: {
       {canCancel(request) && (
         <AlertDialog>
           <AlertDialogTrigger asChild>
-            <Button 
-              variant="ghost" 
-              size="sm" 
+            <Button
+              variant="ghost"
+              size="sm"
               className="text-destructive hover:text-destructive shrink-0"
               disabled={isCancelling}
               data-testid={`button-cancel-request-${request.id}`}
@@ -510,11 +501,6 @@ function RequestHistorySection({ requests, onCancel, isCancelling }: {
               <AlertDialogTitle>予約をキャンセル</AlertDialogTitle>
               <AlertDialogDescription>
                 {request.childName}さんの{formatSlotDateTime(request.toSlotId)}の振替予約をキャンセルしますか？
-                {request.status === "確定" && (
-                  <span className="block mt-2 text-yellow-600 dark:text-yellow-500">
-                    確定済みの予約をキャンセルすると、順番待ちの方に枠が回ります。
-                  </span>
-                )}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -542,7 +528,7 @@ function RequestHistorySection({ requests, onCancel, isCancelling }: {
             振替予約履歴
           </CardTitle>
           <CardDescription>
-            振替予約と順番待ちの状況
+            振替予約の状況
           </CardDescription>
         </div>
         <Link href="/absence">
@@ -564,7 +550,7 @@ function RequestHistorySection({ requests, onCancel, isCancelling }: {
               <div>
                 <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
                   <CheckCircleIcon className="w-4 h-4 text-green-600" />
-                  有効な予約・順番待ち
+                  有効な予約
                 </h4>
                 <div className="space-y-3">
                   {activeRequests.map(renderRequest)}
@@ -614,7 +600,7 @@ export default function MyPage() {
   });
 
   const cancelRequestMutation = useMutation({
-    mutationFn: (requestId: string) => 
+    mutationFn: (requestId: string) =>
       apiRequest("POST", `/api/my/cancel-request/${requestId}`),
     onSuccess: () => {
       toast({ title: "キャンセル完了", description: "振替予約をキャンセルしました" });
@@ -622,16 +608,16 @@ export default function MyPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/my/absences"] });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "エラー", 
-        description: error.message || "キャンセルに失敗しました", 
-        variant: "destructive" 
+      toast({
+        title: "エラー",
+        description: error.message || "キャンセルに失敗しました",
+        variant: "destructive"
       });
     },
   });
 
   const cancelAbsenceMutation = useMutation({
-    mutationFn: (absenceId: string) => 
+    mutationFn: (absenceId: string) =>
       apiRequest("POST", `/api/my/cancel-absence/${absenceId}`),
     onSuccess: () => {
       toast({ title: "取消完了", description: "欠席連絡を取り消しました" });
@@ -639,10 +625,10 @@ export default function MyPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/my/absences"] });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "エラー", 
-        description: error.message || "取り消しに失敗しました", 
-        variant: "destructive" 
+      toast({
+        title: "エラー",
+        description: error.message || "取り消しに失敗しました",
+        variant: "destructive"
       });
     },
   });
@@ -691,10 +677,10 @@ export default function MyPage() {
           </div>
         </div>
 
-        <DashboardSummary 
-          children={children} 
-          absences={absences} 
-          requests={requests} 
+        <DashboardSummary
+          children={children}
+          absences={absences}
+          requests={requests}
         />
 
         <Tabs defaultValue="children" className="w-full">
@@ -715,7 +701,7 @@ export default function MyPage() {
           </TabsContent>
 
           <TabsContent value="absences" className="mt-4">
-            <AbsenceHistorySection 
+            <AbsenceHistorySection
               absences={absences}
               requests={requests}
               onCancelAbsence={(id) => cancelAbsenceMutation.mutate(id)}
@@ -726,8 +712,8 @@ export default function MyPage() {
           </TabsContent>
 
           <TabsContent value="requests" className="mt-4">
-            <RequestHistorySection 
-              requests={requests} 
+            <RequestHistorySection
+              requests={requests}
               onCancel={(id) => cancelRequestMutation.mutate(id)}
               isCancelling={cancelRequestMutation.isPending}
             />

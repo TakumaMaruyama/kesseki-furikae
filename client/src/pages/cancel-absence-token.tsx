@@ -23,7 +23,7 @@ export default function CancelAbsenceTokenPage() {
     const fetchAbsenceInfo = async () => {
       try {
         const response = await fetch(`/api/cancel-absence/${token}/info`);
-        
+
         if (!response.ok) {
           const errorData = await response.json();
           throw new Error(errorData.error || "情報の取得に失敗しました。");
@@ -49,7 +49,7 @@ export default function CancelAbsenceTokenPage() {
       const response = await fetch(`/api/cancel-absence/${token}`, {
         method: "POST",
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || "キャンセルに失敗しました。");
@@ -99,7 +99,7 @@ export default function CancelAbsenceTokenPage() {
               <div className="bg-muted/50 rounded-lg p-4 space-y-2">
                 <p className="text-sm text-muted-foreground">お子様名</p>
                 <p className="font-semibold text-lg">{absenceInfo.childName}</p>
-                
+
                 <p className="text-sm text-muted-foreground mt-4">欠席日</p>
                 <p className="font-semibold">{absenceInfo.absentDate}</p>
                 <p className="text-sm">{absenceInfo.courseLabel} - {absenceInfo.classBand}</p>
@@ -114,7 +114,7 @@ export default function CancelAbsenceTokenPage() {
                 </p>
                 <p className="text-sm text-amber-800 dark:text-amber-300 mt-2">
                   この欠席連絡をキャンセルしてもよろしいですか？
-                  関連する振替予約・順番待ち登録も取り消されます。
+                  関連する振替予約も取り消されます。
                 </p>
               </div>
 
@@ -147,7 +147,7 @@ export default function CancelAbsenceTokenPage() {
                 <strong>{absenceInfo.childName}</strong> さんの欠席連絡をキャンセルしました。
               </p>
               <p className="text-center text-muted-foreground">
-                関連する振替予約・順番待ち登録も取り消されました。
+                関連する振替予約も取り消されました。
               </p>
               <Button
                 onClick={() => setLocation("/")}

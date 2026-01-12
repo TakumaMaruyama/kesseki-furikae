@@ -70,7 +70,7 @@ export default function CancelAbsencePage() {
           )}
           {status === "success" && (
             <p className="text-muted-foreground">
-              関連する振替予約・順番待ち登録も取り消されました。
+              関連する振替予約も取り消されました。
             </p>
           )}
           {status === "error" && (

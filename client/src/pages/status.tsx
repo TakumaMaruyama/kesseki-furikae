@@ -8,12 +8,12 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { 
-  SearchIcon, 
-  CalendarIcon, 
-  ClockIcon, 
-  CheckCircleIcon, 
-  XCircleIcon, 
+import {
+  SearchIcon,
+  CalendarIcon,
+  ClockIcon,
+  CheckCircleIcon,
+  XCircleIcon,
   AlertTriangleIcon,
   Loader2,
   HistoryIcon
@@ -43,7 +43,6 @@ function StatusBadge({ status }: { status: string }) {
     "MAKEUP_CONFIRMED": { variant: "default", label: "振替確定" },
     "EXPIRED": { variant: "destructive", label: "期限切れ" },
     "確定": { variant: "default", label: "確定" },
-    "待ち": { variant: "secondary", label: "順番待ち" },
     "却下": { variant: "destructive", label: "キャンセル済" },
     "期限切れ": { variant: "destructive", label: "期限切れ" },
   };
@@ -80,7 +79,7 @@ export default function StatusPage() {
 
   const cancelAbsenceMutation = useMutation({
     mutationFn: async ({ absenceId, code }: { absenceId: string; code: string }) => {
-      return apiRequest("POST", `/api/cancel-absence/${absenceId}`, { confirmCode: code });
+      return apiRequest("POST", `/api/cancel-absence-by-id/${absenceId}`, { confirmCode: code });
     },
     onSuccess: () => {
       toast({
@@ -166,7 +165,7 @@ export default function StatusPage() {
                   data-testid="input-confirm-code"
                 />
               </div>
-              <Button 
+              <Button
                 onClick={handleSearch}
                 disabled={confirmCode.length !== 6 || isLoading}
                 data-testid="button-search"
@@ -241,8 +240,8 @@ export default function StatusPage() {
                               </Link>
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>
-                                  <Button 
-                                    variant="destructive" 
+                                  <Button
+                                    variant="destructive"
                                     size="sm"
                                     data-testid={`button-cancel-absence-${absence.id}`}
                                   >
@@ -260,9 +259,9 @@ export default function StatusPage() {
                                   <AlertDialogFooter>
                                     <AlertDialogCancel>戻る</AlertDialogCancel>
                                     <AlertDialogAction
-                                      onClick={() => cancelAbsenceMutation.mutate({ 
-                                        absenceId: absence.id, 
-                                        code: searchedCode! 
+                                      onClick={() => cancelAbsenceMutation.mutate({
+                                        absenceId: absence.id,
+                                        code: searchedCode!
                                       })}
                                     >
                                       キャンセルする
@@ -302,12 +301,12 @@ export default function StatusPage() {
                             <span className="text-muted-foreground">振替先:</span>{" "}
                             {formatSlotDateTime(request.toSlotId)}
                           </div>
-                          {(request.status === "確定" || request.status === "待ち") && (
+                          {request.status === "確定" && (
                             <div className="mt-4">
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>
-                                  <Button 
-                                    variant="destructive" 
+                                  <Button
+                                    variant="destructive"
                                     size="sm"
                                     data-testid={`button-cancel-request-${request.id}`}
                                   >
@@ -325,9 +324,9 @@ export default function StatusPage() {
                                   <AlertDialogFooter>
                                     <AlertDialogCancel>戻る</AlertDialogCancel>
                                     <AlertDialogAction
-                                      onClick={() => cancelRequestMutation.mutate({ 
-                                        requestId: request.id, 
-                                        code: searchedCode! 
+                                      onClick={() => cancelRequestMutation.mutate({
+                                        requestId: request.id,
+                                        code: searchedCode!
                                       })}
                                     >
                                       キャンセルする

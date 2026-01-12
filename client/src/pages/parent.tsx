@@ -44,11 +44,14 @@ export default function ParentPage() {
   const [absenceData, setAbsenceData] = useState<AbsenceData | null>(null);
   const [searchParams2, setSearchParams2] = useState<SearchSlotsRequest & { absenceId?: string } | null>(null);
   const { toast } = useToast();
-  const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+  const [viewMode, setViewMode] = useState<"list" | "calendar">(() => {
+    return (localStorage.getItem("hamasui_viewMode") as "list" | "calendar") || "calendar";
+  });
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [showConfirmCodeDialog, setShowConfirmCodeDialog] = useState(false);
   const [confirmCode, setConfirmCode] = useState<string | null>(null);
   const [availableSlotsForAbsence, setAvailableSlotsForAbsence] = useState<any[]>([]);
+  const [slotsLoaded, setSlotsLoaded] = useState(false);
 
   const absenceForm = useForm<CreateAbsenceRequest>({
     resolver: zodResolver(createAbsenceRequestSchema),
@@ -72,17 +75,37 @@ export default function ParentPage() {
     mode: "onChange",
   });
 
+  // LocalStorageから保存された値を読み込み
+  useEffect(() => {
+    if (!token) {
+      const savedName = localStorage.getItem("hamasui_childName");
+      const savedClass = localStorage.getItem("hamasui_classBand");
+      if (savedName) absenceForm.setValue("childName", savedName);
+      if (savedClass) absenceForm.setValue("declaredClassBand", savedClass as any);
+    }
+  }, [token]);
+
   useEffect(() => {
     const subscription = absenceForm.watch((value, { name }) => {
       if ((name === "absentDateISO" || name === "declaredClassBand") &&
         value.absentDateISO && value.declaredClassBand) {
+        setSlotsLoaded(false);
         apiRequest("GET", `/api/class-slots?date=${value.absentDateISO}&classBand=${value.declaredClassBand}`)
           .then((response: any) => {
-            setAvailableSlotsForAbsence(response.slots || []);
-            absenceForm.setValue("originalSlotId", "");
+            const slots = response.slots || [];
+            const validSlots = slots.filter((s: any) => !s.isPastLesson);
+            setAvailableSlotsForAbsence(slots);
+            setSlotsLoaded(true);
+            // 1つしかない場合は自動選択
+            if (validSlots.length === 1) {
+              absenceForm.setValue("originalSlotId", validSlots[0].id);
+            } else {
+              absenceForm.setValue("originalSlotId", "");
+            }
           })
           .catch(() => {
             setAvailableSlotsForAbsence([]);
+            setSlotsLoaded(true);
             absenceForm.setValue("originalSlotId", "");
           });
       }
@@ -186,6 +209,11 @@ export default function ParentPage() {
       }
 
       const result: any = await apiRequest("POST", "/api/absences", data);
+
+      // LocalStorageに保存
+      localStorage.setItem("hamasui_childName", data.childName);
+      localStorage.setItem("hamasui_classBand", data.declaredClassBand);
+
       toast({ title: "欠席連絡を受け付けました", description: "振替枠を自動的に検索します" });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/daily-lessons"] });
       handleAbsenceSuccess(data.childName, data.declaredClassBand, data.absentDateISO, data.contactEmail, result);
@@ -317,6 +345,8 @@ export default function ParentPage() {
                     <p className="text-sm font-semibold text-yellow-800 mb-1">重要なお知らせ</p>
                     <ul className="text-sm text-yellow-700 space-y-1 list-disc list-inside">
                       <li><strong>確認コードは必ず保存してください</strong> - 予約確認・キャンセルに必要です</li>
+                      <li>確認コードが分からなくなった場合は<strong>PICROでメッセージ</strong>をお送りください</li>
+                      <li>欠席連絡は<strong>レッスン開始時間まで</strong>、振替登録は<strong>開始30分前まで</strong>に行ってください</li>
                       <li>メールアドレスを入力すると、振替確定時にも通知が届きます</li>
                       <li>満席の枠は予約できません</li>
                     </ul>
@@ -454,6 +484,13 @@ export default function ParentPage() {
                               ))}
                             </SelectContent>
                           </Select>
+                          {slotsLoaded && availableSlotsForAbsence.filter(s => !s.isPastLesson).length === 0 &&
+                            absenceForm.watch("absentDateISO") &&
+                            absenceForm.watch("declaredClassBand") && (
+                              <p className="text-sm text-destructive mt-1">
+                                この日の{absenceForm.watch("declaredClassBand")}クラスのレッスンはありません
+                              </p>
+                            )}
                           <FormMessage />
                         </FormItem>
                       )}
@@ -584,7 +621,10 @@ export default function ParentPage() {
                     <Button
                       variant={viewMode === "list" ? "default" : "ghost"}
                       size="sm"
-                      onClick={() => setViewMode("list")}
+                      onClick={() => {
+                        setViewMode("list");
+                        localStorage.setItem("hamasui_viewMode", "list");
+                      }}
                       className="rounded-none"
                     >
                       <ListIcon className="w-4 h-4 mr-2" />
@@ -593,7 +633,10 @@ export default function ParentPage() {
                     <Button
                       variant={viewMode === "calendar" ? "default" : "ghost"}
                       size="sm"
-                      onClick={() => setViewMode("calendar")}
+                      onClick={() => {
+                        setViewMode("calendar");
+                        localStorage.setItem("hamasui_viewMode", "calendar");
+                      }}
                       className="rounded-none"
                     >
                       <CalendarIcon className="w-4 h-4 mr-2" />
@@ -678,22 +721,26 @@ export default function ParentPage() {
           <div className="flex flex-col items-center gap-4 py-6">
             <div className="text-center">
               <p className="text-sm text-muted-foreground mb-2">確認コード</p>
-              <div className="flex items-center justify-center gap-2">
+              <div className="flex items-center justify-center gap-2 mb-4">
                 <span
                   className="text-4xl font-bold tracking-[0.3em] font-mono text-primary"
                   data-testid="text-confirm-code"
                 >
                   {confirmCode}
                 </span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={copyConfirmCode}
-                  data-testid="button-copy-code"
-                >
-                  <CopyIcon className="w-5 h-5" />
-                </Button>
               </div>
+              <Button
+                onClick={copyConfirmCode}
+                variant="outline"
+                className="w-full mb-2"
+                data-testid="button-copy-code"
+              >
+                <CopyIcon className="w-5 h-5 mr-2" />
+                確認コードをコピー
+              </Button>
+              <p className="text-sm font-bold text-primary">
+                📸 スクリーンショットで保存してください
+              </p>
             </div>
             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-800 w-full">
               <p className="font-semibold mb-1">重要</p>

@@ -130,6 +130,345 @@ const DAY_OPTIONS = ["月曜", "火曜", "水曜", "木曜", "金曜", "土曜",
 const HOUR_OPTIONS = Array.from({ length: 12 }, (_, i) => String(9 + i).padStart(2, '0'));
 const MINUTE_OPTIONS = ["00", "30"];
 
+// Dashboard Stats Types
+type DashboardStats = {
+  todayAbsences: number;
+  todayMakeups: number;
+  pendingAbsences: number;
+  futureSlots: number;
+  todayLessons: number;
+};
+
+// Enriched Absence type for history
+type EnrichedAbsence = {
+  id: string;
+  childName: string;
+  declaredClassBand: string;
+  absentDate: string;
+  makeupStatus: string;
+  confirmCode: string;
+  courseLabel: string | null;
+  startTime: string | null;
+  createdAt: string;
+};
+
+// Enriched Request type for history
+type EnrichedRequest = {
+  id: string;
+  childName: string;
+  declaredClassBand: string;
+  absentDate: string;
+  status: string;
+  toSlotDate: string | null;
+  toSlotStartTime: string | null;
+  courseLabel: string | null;
+  createdAt: string;
+};
+
+function DashboardOverview() {
+  const { data: stats, isLoading } = useQuery<DashboardStats>({
+    queryKey: ["/api/admin/dashboard-stats"],
+    refetchInterval: 30000, // Refresh every 30 seconds
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-12">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <Card className="border-2">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-muted-foreground">本日のレッスン</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-3xl font-bold">{stats?.todayLessons || 0}</p>
+          <p className="text-xs text-muted-foreground mt-1">件</p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-2 border-destructive/30">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-destructive">本日の欠席</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-3xl font-bold text-destructive">{stats?.todayAbsences || 0}</p>
+          <p className="text-xs text-muted-foreground mt-1">名</p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-2 border-primary/30">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-primary">本日の振替</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-3xl font-bold text-primary">{stats?.todayMakeups || 0}</p>
+          <p className="text-xs text-muted-foreground mt-1">名</p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-2 border-amber-500/30">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-amber-600">振替待ち</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-3xl font-bold text-amber-600">{stats?.pendingAbsences || 0}</p>
+          <p className="text-xs text-muted-foreground mt-1">件</p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-2">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-muted-foreground">今後の枠</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-3xl font-bold">{stats?.futureSlots || 0}</p>
+          <p className="text-xs text-muted-foreground mt-1">件</p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function HistoryView() {
+  const { toast } = useToast();
+  const [historyTab, setHistoryTab] = useState<"absences" | "requests">("absences");
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const { data: absences, isLoading: loadingAbsences } = useQuery<EnrichedAbsence[]>({
+    queryKey: ["/api/admin/absences"],
+  });
+
+  const { data: requests, isLoading: loadingRequests } = useQuery<EnrichedRequest[]>({
+    queryKey: ["/api/admin/requests"],
+  });
+
+  const cancelAbsenceMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/admin/cancel-absence/${id}`, {}),
+    onSuccess: (response: any) => {
+      toast({
+        title: "キャンセル完了",
+        description: response.message || "欠席をキャンセルしました。",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/absences"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard-stats"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "エラー",
+        description: error.message || "キャンセルに失敗しました。",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const cancelRequestMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/admin/cancel-request/${id}`, {}),
+    onSuccess: (response: any) => {
+      toast({
+        title: "キャンセル完了",
+        description: response.message || "振替をキャンセルしました。",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard-stats"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "エラー",
+        description: error.message || "キャンセルに失敗しました。",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleCancelAbsence = (absence: EnrichedAbsence) => {
+    if (confirm(`${absence.childName}さんの欠席連絡をキャンセルしますか？\n\n※元のレッスン枠の人数が復元されます`)) {
+      cancelAbsenceMutation.mutate(absence.id);
+    }
+  };
+
+  const handleCancelRequest = (request: EnrichedRequest) => {
+    if (confirm(`${request.childName}さんの振替予約をキャンセルしますか？\n\n※振替先の枠が空きます`)) {
+      cancelRequestMutation.mutate(request.id);
+    }
+  };
+
+  const filteredAbsences = absences?.filter(a =>
+    a.childName.toLowerCase().includes(searchTerm.toLowerCase())
+  ) || [];
+
+  const filteredRequests = requests?.filter(r =>
+    r.childName.toLowerCase().includes(searchTerm.toLowerCase())
+  ) || [];
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case "PENDING":
+        return <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300">振替待ち</Badge>;
+      case "MAKEUP_CONFIRMED":
+        return <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300">振替済み</Badge>;
+      case "EXPIRED":
+      case "CANCELLED":
+        return <Badge variant="outline" className="bg-gray-50 text-gray-500 border-gray-300">キャンセル</Badge>;
+      case "確定":
+        return <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300">確定</Badge>;
+      case "却下":
+        return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-300">却下</Badge>;
+      default:
+        return <Badge variant="outline">{status}</Badge>;
+    }
+  };
+
+  return (
+    <Card className="border-2">
+      <CardHeader className="p-6">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-xl">欠席・振替履歴</CardTitle>
+          <Input
+            placeholder="名前で検索..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="max-w-xs"
+          />
+        </div>
+        <div className="flex gap-2 mt-4">
+          <Button
+            variant={historyTab === "absences" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setHistoryTab("absences")}
+          >
+            欠席一覧 ({absences?.length || 0})
+          </Button>
+          <Button
+            variant={historyTab === "requests" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setHistoryTab("requests")}
+          >
+            振替一覧 ({requests?.length || 0})
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="p-6 pt-0">
+        {historyTab === "absences" && (
+          <>
+            {loadingAbsences ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="w-6 h-6 animate-spin" />
+              </div>
+            ) : filteredAbsences.length === 0 ? (
+              <p className="text-center text-muted-foreground py-8">欠席データがありません</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>お子様名</TableHead>
+                      <TableHead>クラス</TableHead>
+                      <TableHead>欠席日</TableHead>
+                      <TableHead>レッスン</TableHead>
+                      <TableHead>ステータス</TableHead>
+                      <TableHead>確認コード</TableHead>
+                      <TableHead>操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAbsences.map((absence) => (
+                      <TableRow key={absence.id}>
+                        <TableCell className="font-medium">{absence.childName}</TableCell>
+                        <TableCell>{absence.declaredClassBand}</TableCell>
+                        <TableCell>{format(new Date(absence.absentDate), "M/d(E)", { locale: ja })}</TableCell>
+                        <TableCell>
+                          {absence.courseLabel && absence.startTime
+                            ? `${absence.courseLabel} ${absence.startTime}`
+                            : "-"}
+                        </TableCell>
+                        <TableCell>{getStatusBadge(absence.makeupStatus)}</TableCell>
+                        <TableCell className="font-mono text-sm">{absence.confirmCode}</TableCell>
+                        <TableCell>
+                          {(absence.makeupStatus === "PENDING" || absence.makeupStatus === "MAKEUP_CONFIRMED") && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleCancelAbsence(absence)}
+                              disabled={cancelAbsenceMutation.isPending}
+                              className="text-destructive hover:text-destructive"
+                            >
+                              <XIcon className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </>
+        )}
+
+        {historyTab === "requests" && (
+          <>
+            {loadingRequests ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="w-6 h-6 animate-spin" />
+              </div>
+            ) : filteredRequests.length === 0 ? (
+              <p className="text-center text-muted-foreground py-8">振替データがありません</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>お子様名</TableHead>
+                      <TableHead>クラス</TableHead>
+                      <TableHead>欠席日</TableHead>
+                      <TableHead>振替先</TableHead>
+                      <TableHead>ステータス</TableHead>
+                      <TableHead>操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredRequests.map((request) => (
+                      <TableRow key={request.id}>
+                        <TableCell className="font-medium">{request.childName}</TableCell>
+                        <TableCell>{request.declaredClassBand}</TableCell>
+                        <TableCell>{format(new Date(request.absentDate), "M/d(E)", { locale: ja })}</TableCell>
+                        <TableCell>
+                          {request.toSlotDate && request.toSlotStartTime
+                            ? `${format(new Date(request.toSlotDate), "M/d(E)", { locale: ja })} ${request.toSlotStartTime}`
+                            : "-"}
+                        </TableCell>
+                        <TableCell>{getStatusBadge(request.status)}</TableCell>
+                        <TableCell>
+                          {request.status === "確定" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleCancelRequest(request)}
+                              disabled={cancelRequestMutation.isPending}
+                              className="text-destructive hover:text-destructive"
+                            >
+                              <XIcon className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function CoursesManagement() {
   const { toast } = useToast();
   const [showCourseDialog, setShowCourseDialog] = useState(false);
@@ -559,8 +898,8 @@ function LessonsStatusView() {
                     key={lesson.id}
                     onClick={() => setSelectedSlotId(lesson.id)}
                     className={`w-full text-left p-4 rounded-lg border-2 transition-colors ${selectedSlotId === lesson.id
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center justify-between mb-2">
@@ -723,11 +1062,6 @@ export default function AdminPage() {
     }
   };
 
-  const { data: confirmedRequests, isLoading: loadingConfirmed } = useQuery<Request[]>({
-    queryKey: ["/api/admin/confirmed"],
-    enabled: isAuthenticated === true,
-  });
-
   const { data: allSlots, isLoading: loadingSlots } = useQuery<ClassSlot[]>({
     queryKey: ["/api/admin/slots"],
     enabled: isAuthenticated === true,
@@ -888,22 +1222,13 @@ export default function AdminPage() {
     newEditingSlots.add(slotId);
     setEditingSlots(newEditingSlots);
 
-    // waitingDataから最新のslot情報を必ず取得（古いデータの混在を防ぐ）
-    let latestSlot = slot;
-    if (waitingData) {
-      const latestWaitingItem = waitingData.find(item => item.slotId === slotId);
-      if (latestWaitingItem) {
-        latestSlot = latestWaitingItem.slot;
-      }
-    }
-
     // 前の編集値を完全にクリアしてから、新しい値をセット
     setTimeout(() => {
       setCapacityValues({
         [slotId]: {
-          capacityLimit: latestSlot.capacityLimit,
-          capacityCurrent: latestSlot.capacityCurrent,
-          capacityMakeupUsed: latestSlot.capacityMakeupUsed,
+          capacityLimit: slot.capacityLimit,
+          capacityCurrent: slot.capacityCurrent,
+          capacityMakeupUsed: slot.capacityMakeupUsed,
         },
       });
     }, 0);
@@ -1036,14 +1361,13 @@ export default function AdminPage() {
       </header>
 
       <main className="container px-4 py-8 md:py-12">
-        <Tabs defaultValue="confirmed" className="w-full">
-          <TabsList className="grid w-full max-w-5xl grid-cols-5 h-12">
-            <TabsTrigger value="confirmed" data-testid="tab-confirmed" className="text-base">
-              確定一覧
-            </TabsTrigger>
-            <TabsTrigger value="waiting" data-testid="tab-waiting" className="text-base">
-              待ち一覧
-            </TabsTrigger>
+        {/* Dashboard Overview at top */}
+        <div className="mb-8">
+          <DashboardOverview />
+        </div>
+
+        <Tabs defaultValue="lessons" className="w-full">
+          <TabsList className="grid w-full max-w-4xl grid-cols-4 h-12">
             <TabsTrigger value="lessons" data-testid="tab-lessons" className="text-base">
               レッスン状況
             </TabsTrigger>
@@ -1053,524 +1377,17 @@ export default function AdminPage() {
             <TabsTrigger value="courses" data-testid="tab-courses" className="text-base">
               コース管理
             </TabsTrigger>
+            <TabsTrigger value="history" data-testid="tab-history" className="text-base">
+              履歴
+            </TabsTrigger>
           </TabsList>
-
-          <TabsContent value="confirmed" className="mt-6">
-            <Card className="border-2">
-              <CardHeader className="p-6 flex-row items-center justify-between gap-4 space-y-0">
-                <div>
-                  <CardTitle className="text-xl">確定済み振替リクエスト</CardTitle>
-                  <p className="text-sm text-muted-foreground">
-                    既存管理システムへの手入力用データ
-                  </p>
-                </div>
-                <div className="flex border-2 rounded-lg overflow-hidden">
-                  <Button
-                    variant={viewMode === "list" ? "default" : "ghost"}
-                    size="sm"
-                    onClick={() => setViewMode("list")}
-                    className="rounded-none"
-                  >
-                    <ListIcon className="w-4 h-4 mr-2" />
-                    リスト
-                  </Button>
-                  <Button
-                    variant={viewMode === "calendar" ? "default" : "ghost"}
-                    size="sm"
-                    onClick={() => setViewMode("calendar")}
-                    className="rounded-none"
-                  >
-                    <CalendarIcon className="w-4 h-4 mr-2" />
-                    カレンダー
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="p-6 pt-0">
-                {loadingConfirmed && (
-                  <div className="flex justify-center py-8">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                  </div>
-                )}
-
-                {!loadingConfirmed && confirmedRequests && confirmedRequests.length === 0 && (
-                  <div className="text-center py-12">
-                    <CheckCircleIcon className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
-                    <p className="text-muted-foreground">確定済みのリクエストはありません</p>
-                  </div>
-                )}
-
-                {!loadingConfirmed && confirmedRequests && confirmedRequests.length > 0 && viewMode === "calendar" && (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <div className="flex justify-center">
-                      <Calendar
-                        mode="single"
-                        selected={selectedDate}
-                        onSelect={setSelectedDate}
-                        className="rounded-md border"
-                        locale={ja}
-                        modifiers={{
-                          hasRequests: confirmedRequests.map(req => new Date(req.toSlotStartDateTime)),
-                        }}
-                        modifiersStyles={{
-                          hasRequests: {
-                            fontWeight: 'bold',
-                            backgroundColor: 'hsl(var(--primary) / 0.1)',
-                          },
-                        }}
-                      />
-                    </div>
-                    <div className="space-y-4">
-                      {selectedDate && (() => {
-                        const selectedYear = selectedDate.getFullYear();
-                        const selectedMonth = selectedDate.getMonth();
-                        const selectedDay = selectedDate.getDate();
-
-                        const dayRequests = confirmedRequests.filter(req => {
-                          const reqDate = new Date(req.toSlotStartDateTime);
-                          return reqDate.getFullYear() === selectedYear &&
-                            reqDate.getMonth() === selectedMonth &&
-                            reqDate.getDate() === selectedDay;
-                        });
-
-                        if (dayRequests.length === 0) {
-                          return (
-                            <div className="text-center py-12">
-                              <p className="text-muted-foreground">
-                                {format(selectedDate, "M月d日(E)", { locale: ja })}の確定リクエストはありません
-                              </p>
-                            </div>
-                          );
-                        }
-
-                        return (
-                          <>
-                            <h3 className="text-lg font-bold">
-                              {format(selectedDate, "yyyy年M月d日(E)", { locale: ja })}
-                            </h3>
-                            <div className="space-y-3">
-                              {dayRequests
-                                .sort((a, b) => new Date(a.toSlotStartDateTime).getTime() - new Date(b.toSlotStartDateTime).getTime())
-                                .map((req) => (
-                                  <div
-                                    key={req.id}
-                                    className="border-2 rounded-lg p-4 hover:bg-muted/30 transition-colors"
-                                    data-testid={`row-confirmed-${req.id}`}
-                                  >
-                                    <div className="space-y-2">
-                                      <div className="flex items-center gap-2">
-                                        <p className="font-semibold text-lg">
-                                          {format(new Date(req.toSlotStartDateTime), "HH:mm", { locale: ja })}
-                                        </p>
-                                        <Badge variant="outline">{req.declaredClassBand}</Badge>
-                                      </div>
-                                      <div className="grid grid-cols-2 gap-2 text-sm">
-                                        <div>
-                                          <span className="text-muted-foreground">お子様名: </span>
-                                          <span className="font-semibold">{req.childName}</span>
-                                        </div>
-                                        <div>
-                                          <span className="text-muted-foreground">欠席日: </span>
-                                          <span className="font-semibold">
-                                            {format(new Date(req.absentDate), "M/d", { locale: ja })}
-                                          </span>
-                                        </div>
-                                      </div>
-                                      <div className="text-xs text-muted-foreground">
-                                        申込: {format(new Date(req.createdAt), "M/d HH:mm", { locale: ja })}
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))}
-                            </div>
-                          </>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                )}
-
-                {!loadingConfirmed && confirmedRequests && confirmedRequests.length > 0 && viewMode === "list" && (
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="font-semibold">お子様名</TableHead>
-                          <TableHead className="font-semibold">クラス帯</TableHead>
-                          <TableHead className="font-semibold">欠席日</TableHead>
-                          <TableHead className="font-semibold">振替先</TableHead>
-                          <TableHead className="font-semibold">振替日時</TableHead>
-                          <TableHead className="font-semibold">申込日時</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {confirmedRequests.map((req) => (
-                          <TableRow key={req.id} data-testid={`row-confirmed-${req.id}`}>
-                            <TableCell className="font-medium">{req.childName}</TableCell>
-                            <TableCell>{req.declaredClassBand}</TableCell>
-                            <TableCell>
-                              {format(new Date(req.absentDate), "yyyy/M/d", { locale: ja })}
-                            </TableCell>
-                            <TableCell className="text-sm">{req.toSlotId}</TableCell>
-                            <TableCell>
-                              {format(new Date(req.toSlotStartDateTime), "M/d(E) HH:mm", { locale: ja })}
-                            </TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
-                              {format(new Date(req.createdAt), "M/d HH:mm", { locale: ja })}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="waiting" className="mt-6">
-            {!loadingWaiting && waitingData && waitingData.length > 0 && (
-              <Card className="border-2 mb-6">
-                <CardHeader className="p-6 flex-row items-center justify-between gap-4 space-y-0">
-                  <CardTitle className="text-xl">待ちリスト一覧</CardTitle>
-                  <div className="flex border-2 rounded-lg overflow-hidden">
-                    <Button
-                      variant={viewMode === "list" ? "default" : "ghost"}
-                      size="sm"
-                      onClick={() => setViewMode("list")}
-                      className="rounded-none"
-                    >
-                      <ListIcon className="w-4 h-4 mr-2" />
-                      リスト
-                    </Button>
-                    <Button
-                      variant={viewMode === "calendar" ? "default" : "ghost"}
-                      size="sm"
-                      onClick={() => setViewMode("calendar")}
-                      className="rounded-none"
-                    >
-                      <CalendarIcon className="w-4 h-4 mr-2" />
-                      カレンダー
-                    </Button>
-                  </div>
-                </CardHeader>
-              </Card>
-            )}
-
-            {loadingWaiting && (
-              <div className="flex justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-              </div>
-            )}
-
-            {!loadingWaiting && waitingData && waitingData.length === 0 && (
-              <Card className="border-2">
-                <CardContent className="p-12 text-center">
-                  <ClockIcon className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
-                  <p className="text-lg text-muted-foreground">待ちリストはありません</p>
-                </CardContent>
-              </Card>
-            )}
-
-            {!loadingWaiting && waitingData && waitingData.length > 0 && viewMode === "calendar" && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="flex justify-center">
-                  <Calendar
-                    mode="single"
-                    selected={selectedDate}
-                    onSelect={setSelectedDate}
-                    className="rounded-md border"
-                    locale={ja}
-                    modifiers={{
-                      hasWaiting: waitingData.map(item => new Date(item.slot.date)),
-                    }}
-                    modifiersStyles={{
-                      hasWaiting: {
-                        fontWeight: 'bold',
-                        backgroundColor: 'hsl(var(--warning) / 0.1)',
-                        color: 'hsl(var(--warning))',
-                      },
-                    }}
-                  />
-                </div>
-                <div className="space-y-4">
-                  {selectedDate && (() => {
-                    const selectedYear = selectedDate.getFullYear();
-                    const selectedMonth = selectedDate.getMonth();
-                    const selectedDay = selectedDate.getDate();
-
-                    const dayWaitingData = waitingData.filter(item => {
-                      const slotDate = new Date(item.slot.date);
-                      return slotDate.getFullYear() === selectedYear &&
-                        slotDate.getMonth() === selectedMonth &&
-                        slotDate.getDate() === selectedDay;
-                    });
-
-                    if (dayWaitingData.length === 0) {
-                      return (
-                        <div className="text-center py-12">
-                          <p className="text-muted-foreground">
-                            {format(selectedDate, "M月d日(E)", { locale: ja })}の待ちリストはありません
-                          </p>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <>
-                        <h3 className="text-lg font-bold">
-                          {format(selectedDate, "yyyy年M月d日(E)", { locale: ja })}
-                        </h3>
-                        <div className="space-y-3">
-                          {dayWaitingData
-                            .sort((a, b) => a.slot.startTime.localeCompare(b.slot.startTime))
-                            .map((item) => (
-                              <Card key={item.slotId} className="border-2" data-testid={`card-waiting-${item.slotId}`}>
-                                <CardHeader className="p-4 pb-3">
-                                  <div className="flex items-start justify-between gap-4">
-                                    <div>
-                                      <CardTitle className="text-base mb-1">
-                                        {item.slot.courseLabel} - {item.slot.classBand}
-                                      </CardTitle>
-                                      <p className="text-sm text-muted-foreground">
-                                        {item.slot.startTime}
-                                      </p>
-                                    </div>
-                                    <Badge className="text-sm px-3 py-1">
-                                      待ち {item.requests.length} 名
-                                    </Badge>
-                                  </div>
-                                </CardHeader>
-                                <CardContent className="p-4 pt-0 space-y-3">
-                                  <div className="grid grid-cols-3 gap-2 p-3 bg-muted/50 rounded-lg text-sm">
-                                    <div>
-                                      <p className="text-xs text-muted-foreground mb-1">振替可能枠（自動計算）</p>
-                                      <p className="font-semibold">{item.slot.capacityLimit - item.slot.capacityCurrent}</p>
-                                    </div>
-                                    <div>
-                                      <p className="text-xs text-muted-foreground mb-1">使用済み</p>
-                                      <p className="font-semibold">{item.slot.capacityMakeupUsed}</p>
-                                    </div>
-                                    <div>
-                                      <p className="text-xs text-muted-foreground mb-1">残り</p>
-                                      <p className="font-semibold">
-                                        {(item.slot.capacityLimit - item.slot.capacityCurrent) - item.slot.capacityMakeupUsed}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="space-y-2">
-                                    {item.requests.slice(0, 3).map((req, index) => (
-                                      <div
-                                        key={req.id}
-                                        className="flex items-center gap-2 text-sm"
-                                      >
-                                        <Badge variant="outline" className="text-xs">
-                                          {index + 1}番目
-                                        </Badge>
-                                        <span className="font-medium">{req.childName}</span>
-                                      </div>
-                                    ))}
-                                    {item.requests.length > 3 && (
-                                      <p className="text-xs text-muted-foreground">
-                                        他 {item.requests.length - 3} 名
-                                      </p>
-                                    )}
-                                  </div>
-                                </CardContent>
-                              </Card>
-                            ))}
-                        </div>
-                      </>
-                    );
-                  })()}
-                </div>
-              </div>
-            )}
-
-            {!loadingWaiting && waitingData && waitingData.length > 0 && viewMode === "list" && (
-              <div className="space-y-6">
-                {waitingData.map((item) => (
-                  <Card key={item.slotId} className="border-2" data-testid={`card-waiting-${item.slotId}`}>
-                    <CardHeader className="p-6 pb-4">
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                          <CardTitle className="text-lg mb-2">
-                            {item.slot.courseLabel} - {item.slot.classBand}
-                          </CardTitle>
-                          <p className="text-base text-muted-foreground">
-                            {format(new Date(item.slot.lessonStartDateTime), "yyyy年M月d日(E) HH:mm", { locale: ja })}
-                          </p>
-                        </div>
-                        <Badge className="text-sm px-3 py-1">
-                          待ち {item.requests.length} 名
-                        </Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="p-6 pt-0 space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-muted/50 rounded-lg">
-                        {editingSlots.has(item.slotId) ? (
-                          <>
-                            <div>
-                              <Label className="text-xs mb-1 block">定員</Label>
-                              <Input
-                                type="number"
-                                value={capacityValues[item.slotId]?.capacityLimit ?? ''}
-                                onChange={(e) =>
-                                  setCapacityValues({
-                                    ...capacityValues,
-                                    [item.slotId]: {
-                                      ...capacityValues[item.slotId],
-                                      capacityLimit: e.target.value,
-                                    },
-                                  })
-                                }
-                                className="h-10"
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs mb-1 block">現在の参加者数</Label>
-                              <Input
-                                type="number"
-                                value={capacityValues[item.slotId]?.capacityCurrent ?? ''}
-                                onChange={(e) =>
-                                  setCapacityValues({
-                                    ...capacityValues,
-                                    [item.slotId]: {
-                                      ...capacityValues[item.slotId],
-                                      capacityCurrent: e.target.value,
-                                    },
-                                  })
-                                }
-                                className="h-10"
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs mb-1 block">使用済み枠数</Label>
-                              <Input
-                                type="number"
-                                value={capacityValues[item.slotId]?.capacityMakeupUsed ?? ''}
-                                onChange={(e) =>
-                                  setCapacityValues({
-                                    ...capacityValues,
-                                    [item.slotId]: {
-                                      ...capacityValues[item.slotId],
-                                      capacityMakeupUsed: e.target.value,
-                                    },
-                                  })
-                                }
-                                className="h-10"
-                              />
-                            </div>
-                            <div className="flex items-end gap-2">
-                              <Button
-                                onClick={() => handleSaveCapacity(item.slotId)}
-                                size="sm"
-                                data-testid={`button-save-${item.slotId}`}
-                              >
-                                保存
-                              </Button>
-                              <Button
-                                onClick={() => {
-                                  const newEditingSlots = new Set(editingSlots);
-                                  newEditingSlots.delete(item.slotId);
-                                  setEditingSlots(newEditingSlots);
-                                  const newCapacityValues = { ...capacityValues };
-                                  delete newCapacityValues[item.slotId];
-                                  setCapacityValues(newCapacityValues);
-                                }}
-                                size="sm"
-                                variant="outline"
-                              >
-                                キャンセル
-                              </Button>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div>
-                              <p className="text-xs text-muted-foreground mb-1">振替可能枠（自動計算）</p>
-                              <p className="text-base font-semibold">{item.slot.capacityLimit - item.slot.capacityCurrent}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground mb-1">使用済み枠数</p>
-                              <p className="text-base font-semibold">{item.slot.capacityMakeupUsed}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground mb-1">残り枠数</p>
-                              <p className="text-base font-semibold">
-                                {(item.slot.capacityLimit - item.slot.capacityCurrent) - item.slot.capacityMakeupUsed}
-                              </p>
-                            </div>
-                          </>
-                        )}
-                      </div>
-
-                      {!editingSlots.has(item.slotId) && (
-                        <div className="flex gap-2">
-                          <Button
-                            onClick={() => handleEditSlot(item.slotId, item.slot)}
-                            variant="outline"
-                            size="sm"
-                            data-testid={`button-edit-${item.slotId}`}
-                          >
-                            容量を編集
-                          </Button>
-                          <Button
-                            onClick={() => handleCloseWaitlist(item.slotId)}
-                            variant="outline"
-                            size="sm"
-                            data-testid={`button-close-${item.slotId}`}
-                          >
-                            1時間前クローズ
-                          </Button>
-                        </div>
-                      )}
-
-                      <div className="border-t pt-4">
-                        <h4 className="text-sm font-semibold mb-3">待ちリスト（順番順）</h4>
-                        <div className="space-y-2">
-                          {item.requests.map((req, index) => (
-                            <div
-                              key={req.id}
-                              className="flex items-center justify-between p-3 bg-card border rounded-lg"
-                              data-testid={`row-waiting-request-${req.id}`}
-                            >
-                              <div className="flex items-center gap-2">
-                                <Badge variant="outline" className="text-xs">
-                                  {index + 1}番目
-                                </Badge>
-                                <div>
-                                  <p className="font-medium">{req.childName}</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    {req.contactEmail}
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <p className="text-xs text-muted-foreground">
-                                  {format(new Date(req.createdAt), "M/d HH:mm", { locale: ja })}
-                                </p>
-                                <Button
-                                  onClick={() => handleCancelRequest(req.id)}
-                                  variant="ghost"
-                                  size="sm"
-                                  data-testid={`button-cancel-waiting-${req.id}`}
-                                >
-                                  <XIcon className="w-3 h-3" />
-                                </Button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
-          </TabsContent>
 
           <TabsContent value="lessons" className="mt-6">
             <LessonsStatusView />
+          </TabsContent>
+
+          <TabsContent value="history" className="mt-6">
+            <HistoryView />
           </TabsContent>
 
           <TabsContent value="slots" className="mt-6">
@@ -1949,19 +1766,18 @@ export default function AdminPage() {
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <div>
-                <p className="font-semibold mb-1">🔄 自動振替確定</p>
+                <p className="font-semibold mb-1">🔄 振替予約について</p>
                 <ul className="list-disc list-inside space-y-1 text-muted-foreground ml-2">
-                  <li>順番待ちに登録されている方に空きが出ると自動的に振替が確定します</li>
+                  <li>保護者は空き枠があるレッスンを選択して振替予約を行います</li>
                   <li>確定時に保護者へメール通知が送信されます</li>
-                  <li>辞退があった場合は次の順番待ちの方に自動案内されます</li>
+                  <li>満席の枠は予約できません</li>
                 </ul>
               </div>
               <div>
-                <p className="font-semibold mb-1">⏰ レッスン1時間前の自動処理</p>
+                <p className="font-semibold mb-1">⏰ 振替期限について</p>
                 <ul className="list-disc list-inside space-y-1 text-muted-foreground ml-2">
-                  <li>30分ごとにシステムが自動チェックを実行します</li>
-                  <li>レッスン開始1時間前になると順番待ちリストが自動クローズされます</li>
-                  <li>間に合わなかった順番待ちの方にはお知らせメールが送信されます</li>
+                  <li>欠席日から30日以内に振替予約を行う必要があります</li>
+                  <li>振替予約はレッスン開始30分前まで可能です</li>
                 </ul>
               </div>
             </CardContent>
@@ -1980,10 +1796,10 @@ export default function AdminPage() {
                 <p className="text-muted-foreground ml-4">登録したメールアドレスに専用の振替予約リンクが送信される</p>
 
                 <p className="font-semibold">3️⃣ 振替枠の検索・予約</p>
-                <p className="text-muted-foreground ml-4">メールのリンクから振替可能な枠を検索し、空きがあれば予約、満席なら順番待ちに登録</p>
+                <p className="text-muted-foreground ml-4">メールのリンクから振替可能な枠を検索し、空きがあれば予約を確定</p>
 
-                <p className="font-semibold">4️⃣ 自動確定</p>
-                <p className="text-muted-foreground ml-4">順番待ちの場合、空きが出ると自動的に振替が確定しメール通知が届く</p>
+                <p className="font-semibold">4️⃣ 確認メール</p>
+                <p className="text-muted-foreground ml-4">振替予約が確定するとメール通知が届く</p>
               </div>
 
               <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
@@ -2022,7 +1838,7 @@ export default function AdminPage() {
           }
         }}
       />
-    </div>
+    </div >
   );
 }
 

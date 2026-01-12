@@ -23,7 +23,7 @@ export default function DeclinePage() {
     const fetchRequestInfo = async () => {
       try {
         const response = await fetch(`/api/decline/${token}/info`);
-        
+
         if (!response.ok) {
           const errorData = await response.json();
           throw new Error(errorData.error || "情報の取得に失敗しました。");
@@ -49,7 +49,7 @@ export default function DeclinePage() {
       const response = await fetch(`/api/decline/${token}`, {
         method: "POST",
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || "辞退処理に失敗しました。");
@@ -99,7 +99,7 @@ export default function DeclinePage() {
               <div className="bg-muted/50 rounded-lg p-4 space-y-2">
                 <p className="text-sm text-muted-foreground">お子様名</p>
                 <p className="font-semibold text-lg">{requestInfo.childName}</p>
-                
+
                 <p className="text-sm text-muted-foreground mt-4">振替予約</p>
                 <p className="font-semibold">
                   {requestInfo.date} {requestInfo.startTime}
@@ -113,7 +113,6 @@ export default function DeclinePage() {
                 </p>
                 <p className="text-sm text-amber-800 dark:text-amber-300 mt-2">
                   この振替予約を辞退してもよろしいですか？
-                  辞退すると、次の順番待ちの方に自動的にご案内されます。
                 </p>
               </div>
 
@@ -143,9 +142,7 @@ export default function DeclinePage() {
           {status === "success" && (
             <>
               <p className="text-center text-lg">振替予約を辞退しました。</p>
-              <p className="text-center text-muted-foreground">
-                次の順番待ちの方に自動的にご案内いたします。
-              </p>
+              <p className="text-center text-muted-foreground"></p>
               <Button
                 onClick={() => setLocation("/")}
                 className="w-full mt-4"

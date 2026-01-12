@@ -25,14 +25,14 @@ export default function CancelRequestPage() {
     const cancelRequest = async () => {
       try {
         const response = await fetch(`/api/cancel?requestId=${requestId}&token=${token}`);
-        
+
         if (!response.ok) {
           const errorData = await response.json();
           throw new Error(errorData.error || "キャンセルに失敗しました。");
         }
 
         const data = await response.json();
-        
+
         setChildName(data.childName || "");
         setStatus("success");
         setMessage(data.message || "振替予約をキャンセルしました。");
@@ -75,9 +75,7 @@ export default function CancelRequestPage() {
             </p>
           )}
           {status === "success" && (
-            <p className="text-muted-foreground">
-              空き枠が発生したため、次の順番待ちの方に自動的にご案内いたします。
-            </p>
+            <p className="text-muted-foreground"></p>
           )}
           {status === "error" && (
             <p className="text-muted-foreground">{message}</p>

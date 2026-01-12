@@ -305,7 +305,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Cancel absence by confirm code
-  app.post("/api/cancel-absence/:absenceId", async (req, res) => {
+  app.post("/api/cancel-absence-by-id/:absenceId", async (req, res) => {
     try {
       const absenceId = req.params.absenceId;
       const { confirmCode } = req.body;
@@ -346,28 +346,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         if (!originalSlotAvailable) {
           return res.status(400).json({
-            error: "欠席登録から10分以上経過しているため、元のレッスンに空きがない場合は欠席キャンセルできません。出席を希望される場合は、他の方と同様に順番待ち登録をしてください。",
+            error: "欠席登録から10分以上経過しているため、元のレッスンに空きがない場合は欠席キャンセルできません。",
           });
         }
       }
 
       // 関連する振替予約をすべてキャンセル
       const relatedRequests = await storage.getRequestsByAbsenceId(absence.id);
-      const activeRequests = relatedRequests.filter(r => r.status === "確定" || r.status === "待ち");
+      const activeRequests = relatedRequests.filter(r => r.status === "確定");
 
       for (const request of activeRequests) {
         const slot = await storage.getClassSlotById(request.toSlotId);
         if (!slot) continue;
 
-        if (request.status === "確定") {
-          await storage.updateClassSlot(request.toSlotId, {
-            capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-          });
-        } else if (request.status === "待ち") {
-          await storage.updateClassSlot(request.toSlotId, {
-            waitlistCount: Math.max(0, (slot.waitlistCount || 0) - 1),
-          });
-        }
+        await storage.updateClassSlot(request.toSlotId, {
+          capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
+        });
 
         await storage.updateRequest(request.id, { status: "却下" });
       }
@@ -487,6 +481,184 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allConfirmed = await storage.getConfirmedRequests();
       const filtered = allConfirmed.filter(r => r.contactEmail === null);
       res.json(filtered);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Admin: Get all absences for history view
+  app.get("/api/admin/absences", async (req, res) => {
+    try {
+      const allAbsences = await storage.getAllAbsences();
+
+      // Enrich with slot info
+      const enrichedAbsences = await Promise.all(
+        allAbsences.map(async (absence) => {
+          const slot = await storage.getClassSlotById(absence.originalSlotId);
+          return {
+            ...absence,
+            courseLabel: slot?.courseLabel || null,
+            startTime: slot?.startTime || null,
+          };
+        })
+      );
+
+      res.json(enrichedAbsences);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Admin: Get all requests for history view
+  app.get("/api/admin/requests", async (req, res) => {
+    try {
+      const allRequests = await db.select().from(requests).orderBy(asc(requests.createdAt));
+
+      // Enrich with slot info
+      const enrichedRequests = await Promise.all(
+        allRequests.map(async (request) => {
+          const slot = await storage.getClassSlotById(request.toSlotId);
+          return {
+            ...request,
+            courseLabel: slot?.courseLabel || null,
+            toSlotDate: slot?.date || null,
+            toSlotStartTime: slot?.startTime || null,
+          };
+        })
+      );
+
+      res.json(enrichedRequests);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Admin: Dashboard stats
+  app.get("/api/admin/dashboard-stats", async (req, res) => {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      // Get today's slots
+      const todaySlots = await storage.getClassSlotsByDate(today);
+
+      // Count today's absences and makeups
+      let todayAbsences = 0;
+      let todayMakeups = 0;
+
+      for (const slot of todaySlots) {
+        const slotAbsences = await storage.getAbsencesByOriginalSlotId(slot.id);
+        const slotMakeups = await storage.getConfirmedRequestsBySlotId(slot.id);
+        todayAbsences += slotAbsences.length;
+        todayMakeups += slotMakeups.length;
+      }
+
+      // Get total pending absences (makeup not yet confirmed)
+      const allAbsences = await storage.getAllAbsences();
+      const pendingAbsences = allAbsences.filter(a => a.makeupStatus === "PENDING").length;
+
+      // Get future slots count
+      const futureSlots = await storage.countFutureSlots();
+
+      res.json({
+        todayAbsences,
+        todayMakeups,
+        pendingAbsences,
+        futureSlots,
+        todayLessons: todaySlots.length,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Admin: Cancel absence (with slot capacity update)
+  app.post("/api/admin/cancel-absence/:id", async (req, res) => {
+    try {
+      const absenceId = req.params.id;
+
+      const absence = await storage.getAbsenceById(absenceId);
+      if (!absence) {
+        return res.status(404).json({ error: "欠席連絡が見つかりません" });
+      }
+
+      if (absence.makeupStatus === "EXPIRED" || absence.makeupStatus === "CANCELLED") {
+        return res.status(400).json({ error: "この欠席は既にキャンセル済みです" });
+      }
+
+      // Cancel related requests
+      const relatedRequests = await storage.getRequestsByAbsenceId(absence.id);
+      for (const request of relatedRequests) {
+        if (request.status === "確定") {
+          const slot = await storage.getClassSlotById(request.toSlotId);
+          if (slot) {
+            await storage.updateClassSlot(request.toSlotId, {
+              capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
+            });
+          }
+          await storage.updateRequest(request.id, { status: "却下" });
+        }
+      }
+
+      // Restore original slot capacity
+      const originalSlot = await storage.getClassSlotById(absence.originalSlotId);
+      if (originalSlot) {
+        await storage.updateClassSlot(absence.originalSlotId, {
+          capacityCurrent: originalSlot.capacityCurrent + 1,
+        });
+      }
+
+      // Mark absence as expired
+      await storage.updateAbsence(absenceId, { makeupStatus: "EXPIRED" });
+
+      res.json({
+        success: true,
+        message: "欠席連絡をキャンセルしました",
+        childName: absence.childName
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Admin: Cancel request (with slot capacity update)
+  app.post("/api/admin/cancel-request/:id", async (req, res) => {
+    try {
+      const requestId = req.params.id;
+
+      const request = await storage.getRequestById(requestId);
+      if (!request) {
+        return res.status(404).json({ error: "振替予約が見つかりません" });
+      }
+
+      if (request.status === "却下" || request.status === "期限切れ") {
+        return res.status(400).json({ error: "この予約は既にキャンセル済みです" });
+      }
+
+      // Update slot capacity if it was confirmed
+      if (request.status === "確定") {
+        const slot = await storage.getClassSlotById(request.toSlotId);
+        if (slot) {
+          await storage.updateClassSlot(request.toSlotId, {
+            capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
+          });
+        }
+
+        // Reset absence status to PENDING if exists
+        if (request.absenceId) {
+          await storage.updateAbsence(request.absenceId, { makeupStatus: "PENDING" });
+        }
+      }
+
+      await storage.updateRequest(requestId, { status: "却下" });
+
+      res.json({
+        success: true,
+        message: "振替予約をキャンセルしました",
+        childName: request.childName
+      });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -692,27 +864,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         if (!originalSlotAvailable) {
           return res.status(400).json({
-            error: "欠席登録から10分以上経過しているため、元のレッスンに空きがない場合は欠席キャンセルできません。出席を希望される場合は、他の方と同様に順番待ち登録をしてください。",
+            error: "欠席登録から10分以上経過しているため、元のレッスンに空きがない場合は欠席キャンセルできません。",
           });
         }
       }
 
       const relatedRequests = await storage.getRequestsByAbsenceId(absence.id);
-      const activeRequests = relatedRequests.filter(r => r.status === "確定" || r.status === "待ち");
+      const activeRequests = relatedRequests.filter(r => r.status === "確定");
 
       for (const request of activeRequests) {
         const slot = await storage.getClassSlotById(request.toSlotId);
         if (!slot) continue;
 
-        if (request.status === "確定") {
-          await storage.updateClassSlot(request.toSlotId, {
-            capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-          });
-        } else if (request.status === "待ち") {
-          await storage.updateClassSlot(request.toSlotId, {
-            waitlistCount: Math.max(0, (slot.waitlistCount || 0) - 1),
-          });
-        }
+        await storage.updateClassSlot(request.toSlotId, {
+          capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
+        });
 
         await storage.updateRequest(request.id, { status: "却下" });
       }
@@ -782,7 +948,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           statusText = "残席わずか（残り1枠）";
         } else {
           statusCode = "×";
-          statusText = `欠席者待ち（現在${slot.waitlistCount || 0}名待ち）`;
+          statusText = "満席";
         }
 
         return {
@@ -794,9 +960,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           statusCode,
           statusText,
           remainingSlots,
-          waitlistCount: slot.waitlistCount || 0,
           capacityLimit: slot.capacityLimit,
           capacityCurrent: slot.capacityCurrent,
+          capacityMakeupUsed: slot.capacityMakeupUsed || 0,
         };
       });
 
@@ -821,13 +987,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const remainingSlots = (slot.capacityLimit - slot.capacityCurrent) - (slot.capacityMakeupUsed || 0);
       if (remainingSlots < 1) {
-        return res.status(400).json({ success: false, message: "空きがありません。順番待ちで申し込んでください。" });
+        return res.status(400).json({ success: false, message: "この枠は満席のため予約できません。" });
       }
 
       // Check for duplicate registration by same person for same slot
       const existingRequests = await storage.getRequestsBySlotId(data.toSlotId);
       const duplicateRequest = existingRequests.find(
-        r => (r.status === "確定" || r.status === "待ち") && r.childName === data.childName
+        r => r.status === "確定" && r.childName === data.childName
       );
       if (duplicateRequest) {
         return res.status(400).json({
@@ -1107,11 +1273,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+
       if (request.absenceId) {
         await storage.updateAbsence(request.absenceId, { makeupStatus: "PENDING" });
       }
-
-      await confirmNextWaiter(request.toSlotId);
 
       res.send(renderPage(
         "辞退が完了しました",
@@ -1583,13 +1748,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.updateClassSlot(request.toSlotId, {
           capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
         });
-
-        await confirmNextWaiter(request.toSlotId);
       }
 
       if (request.absenceId) {
         await storage.updateAbsence(request.absenceId, {
-          makeupStatus: "NOT_RESERVED",
+          makeupStatus: "PENDING",
         });
       }
 
@@ -1612,7 +1775,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "無効なトークンです" });
       }
 
-      if (request.status !== "確定" && request.status !== "待ち") {
+      if (request.status !== "確定") {
         return res.status(400).json({ error: "この予約は既に処理されています" });
       }
 
@@ -1643,12 +1806,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "無効なトークンです" });
       }
 
-      if (request.status !== "確定" && request.status !== "待ち") {
+      if (request.status !== "確定") {
         return res.status(400).json({ error: "この予約は既に処理されています" });
       }
-
-      const wasConfirmed = request.status === "確定";
-      const statusText = request.status === "確定" ? "振替予約" : "順番待ち";
 
       await storage.updateRequest(request.id, {
         status: "キャンセル",
@@ -1657,22 +1817,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const slot = await storage.getClassSlotById(request.toSlotId);
       if (slot) {
-        if (wasConfirmed) {
-          await storage.updateClassSlot(request.toSlotId, {
-            capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-          });
-        }
+        await storage.updateClassSlot(request.toSlotId, {
+          capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
+        });
       }
 
       if (request.absenceId) {
         await storage.updateAbsence(request.absenceId, {
-          makeupStatus: "NOT_RESERVED",
+          makeupStatus: "PENDING",
         });
       }
 
       res.json({
         success: true,
-        message: `${statusText}をキャンセルしました`,
+        message: "振替予約をキャンセルしました",
         childName: request.childName,
       });
     } catch (error: any) {

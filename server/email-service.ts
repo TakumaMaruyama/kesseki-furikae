@@ -196,7 +196,7 @@ export async function sendAbsenceConfirmationEmail(
         <ol style="margin: 8px 0; padding-left: 20px; font-size: 14px;">
           <li style="margin: 4px 0;">下記のボタンをクリックして振替予約画面へ</li>
           <li style="margin: 4px 0;">カレンダーまたはリストから希望の日時を選択</li>
-          <li style="margin: 4px 0;">空きがあれば即時予約、満席なら順番待ちに登録</li>
+          <li style="margin: 4px 0;">空きがあればその場で予約確定</li>
           <li style="margin: 4px 0;">予約確定時にメールで通知が届きます</li>
         </ol>
       </div>
@@ -211,7 +211,6 @@ export async function sendAbsenceConfirmationEmail(
           <li style="margin: 4px 0;"><strong>このリンクは必ず保存してください</strong> - 後から振替予約を行う際に必要です</li>
           <li style="margin: 4px 0;">リンクをブックマークまたはメールを保存しておくことをお勧めします</li>
           <li style="margin: 4px 0;">振替期限: ${makeupDeadline}まで</li>
-          <li style="margin: 4px 0;">レッスン開始1時間前以降は順番待ち登録ができなくなります</li>
         </ul>
       </div>
 
@@ -361,7 +360,6 @@ export async function sendMakeupConfirmationEmail(
         <ul style="margin: 0; padding-left: 20px; font-size: 14px; color: #166534;">
           <li style="margin: 4px 0;">当日は時間に遅れないようお越しください</li>
           <li style="margin: 4px 0;">都合がつかない場合は下記のキャンセルボタンから手続きできます</li>
-          <li style="margin: 4px 0;">キャンセルすると次の順番待ちの方に自動的に案内されます</li>
         </ul>
       </div>
 
@@ -502,7 +500,6 @@ export async function sendConfirmationEmail(
 
       <p><strong>都合が悪くなった場合の辞退について：</strong></p>
       <p>• 以下のボタンから辞退が可能です</p>
-      <p>• 辞退された場合、次の順番待ちの方に自動的にご案内されます</p>
       <p>• なるべく早めにお手続きいただけますと助かります</p>
 
       <div style="text-align: center;">
@@ -528,7 +525,7 @@ export async function sendConfirmationEmail(
         html: htmlContent,
       });
     },
-    "待ち確定通知",
+    "振替確定通知",
     toEmail
   );
 }
@@ -609,7 +606,7 @@ export async function sendExpiredEmail(
 
     <div class="content">
       <p>いつもご利用ありがとうございます。</p>
-      <p><strong>${childName}</strong> さんの順番待ちについてお知らせいたします。</p>
+      <p><strong>${childName}</strong> さんの振替予約についてお知らせいたします。</p>
 
       <div class="info-box">
         <p><strong>コース：</strong>${courseLabel}</p>
@@ -617,7 +614,7 @@ export async function sendExpiredEmail(
         <p><strong>日時：</strong>${date} ${startTime}</p>
       </div>
 
-      <p>誠に申し訳ございませんが、レッスン開始1時間前で振替枠に空きが無かったため、今回はご案内ができませんでした。</p>
+      <p>誠に申し訳ございませんが、振替期限切れのため今回はご案内ができませんでした。</p>
       <p>また別の機会にお申し込みください。</p>
     </div>
 
@@ -742,7 +739,7 @@ export async function sendRequestCancellationEmail(
 ) {
   const { client, fromEmail } = await getUncachableResendClient();
 
-  const statusText = previousStatus === "確定" ? "振替予約" : "順番待ち登録";
+  const statusText = "振替予約";
 
   const htmlContent = `
 <!DOCTYPE html>

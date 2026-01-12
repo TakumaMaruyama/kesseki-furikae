@@ -335,7 +335,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAbsencesByOriginalSlotId(slotId: string): Promise<Absence[]> {
-    return db.select().from(absences).where(eq(absences.originalSlotId, slotId));
+    return db.select().from(absences).where(
+      and(
+        eq(absences.originalSlotId, slotId),
+        sql`${absences.makeupStatus} NOT IN ('CANCELLED', 'EXPIRED')`
+      )
+    );
   }
 
   async createAbsence(data: InsertAbsence): Promise<Absence> {
