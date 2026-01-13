@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
@@ -22,6 +22,27 @@ import { ja } from "date-fns/locale";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 
+// Admin authentication middleware
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const sess = req.session as any;
+  const isAdmin = sess?.isAdmin === true;
+  const loginTime = sess?.adminLoginTime;
+  
+  // Session expires after 24 hours
+  const sessionDuration = 24 * 60 * 60 * 1000;
+  const isExpired = loginTime && (Date.now() - loginTime > sessionDuration);
+  
+  if (isAdmin && !isExpired) {
+    next();
+  } else {
+    if (isExpired) {
+      sess.isAdmin = false;
+      sess.adminLoginTime = null;
+    }
+    res.status(401).json({ error: "認証が必要です" });
+  }
+}
+
 // Generate a 6-digit confirmation code
 function generateConfirmCode(): string {
   return Math.random().toString().slice(2, 8).padStart(6, '0');
@@ -43,6 +64,20 @@ async function getSlotAbsencesAndMakeups(slotId: string) {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Validate session secret in production
+  const sessionSecret = process.env.SESSION_SECRET;
+  if (process.env.NODE_ENV === "production" && !sessionSecret) {
+    console.error("⚠️ 本番環境ではSESSION_SECRET環境変数を設定してください。");
+    throw new Error("SESSION_SECRET is required in production");
+  }
+
+  // Check if admin password is set
+  const adminPasswordHash = await storage.getAdminPasswordHash();
+  if (!adminPasswordHash) {
+    console.warn("⚠️ 管理者パスワードが設定されていません。以下のコマンドで設定してください:");
+    console.warn("   npx tsx set-admin-password.ts <password>");
+  }
+
   // Simple session setup for admin (no user auth needed)
   const PgSession = connectPgSimple(session);
   app.set("trust proxy", 1);
@@ -53,7 +88,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         tableName: "admin_sessions",
         createTableIfMissing: true,
       }),
-      secret: process.env.SESSION_SECRET || "hamasui-session-secret-2025",
+      secret: sessionSecret || "hamasui-session-secret-2025",
       resave: false,
       saveUninitialized: false,
       cookie: {
@@ -146,7 +181,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/courses", async (req, res) => {
+  app.get("/api/admin/courses", requireAdmin, async (req, res) => {
     try {
       const courses = await storage.getAllCourses();
       res.json(courses);
@@ -155,7 +190,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/admin/courses", async (req, res) => {
+  app.post("/api/admin/courses", requireAdmin, async (req, res) => {
     try {
       const data = createCourseRequestSchema.parse(req.body);
       const course = await storage.createCourse({
@@ -170,7 +205,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/admin/courses/:id", async (req, res) => {
+  app.put("/api/admin/courses/:id", requireAdmin, async (req, res) => {
     try {
       const courseId = req.params.id;
       const data = updateCourseRequestSchema.parse({ ...req.body, id: courseId });
@@ -192,7 +227,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/admin/courses/:id", async (req, res) => {
+  app.delete("/api/admin/courses/:id", requireAdmin, async (req, res) => {
     try {
       const courseId = req.params.id;
       const success = await storage.deleteCourse(courseId);
@@ -423,7 +458,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/lesson-status", async (req, res) => {
+  app.get("/api/admin/lesson-status", requireAdmin, async (req, res) => {
     try {
       const { slotId } = req.query;
 
@@ -444,7 +479,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/daily-lessons", async (req, res) => {
+  app.get("/api/admin/daily-lessons", requireAdmin, async (req, res) => {
     try {
       const { date } = req.query;
 
@@ -473,7 +508,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/confirmed", async (req, res) => {
+  app.get("/api/admin/confirmed", requireAdmin, async (req, res) => {
     try {
       const allConfirmed = await storage.getConfirmedRequests();
       const filtered = allConfirmed.filter(r => r.contactEmail === null);
@@ -484,7 +519,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: Get all absences for history view
-  app.get("/api/admin/absences", async (req, res) => {
+  app.get("/api/admin/absences", requireAdmin, async (req, res) => {
     try {
       const allAbsences = await storage.getAllAbsences();
 
@@ -507,7 +542,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: Get all requests for history view
-  app.get("/api/admin/requests", async (req, res) => {
+  app.get("/api/admin/requests", requireAdmin, async (req, res) => {
     try {
       const allRequests = await db.select().from(requests).orderBy(asc(requests.createdAt));
 
@@ -531,7 +566,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: Dashboard stats
-  app.get("/api/admin/dashboard-stats", async (req, res) => {
+  app.get("/api/admin/dashboard-stats", requireAdmin, async (req, res) => {
     try {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -572,7 +607,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: Cancel absence (with slot capacity update)
-  app.post("/api/admin/cancel-absence/:id", async (req, res) => {
+  app.post("/api/admin/cancel-absence/:id", requireAdmin, async (req, res) => {
     try {
       const absenceId = req.params.id;
 
@@ -617,7 +652,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: Cancel request (with slot capacity update)
-  app.post("/api/admin/cancel-request/:id", async (req, res) => {
+  app.post("/api/admin/cancel-request/:id", requireAdmin, async (req, res) => {
     try {
       const requestId = req.params.id;
 
@@ -1323,7 +1358,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
 
-  app.get("/api/admin/slots", async (req, res) => {
+  app.get("/api/admin/slots", requireAdmin, async (req, res) => {
     try {
       const slots = await db.select().from(classSlots).orderBy(asc(classSlots.lessonStartDateTime));
       res.json(slots);
@@ -1332,7 +1367,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/admin/create-slot", async (req, res) => {
+  app.post("/api/admin/create-slot", requireAdmin, async (req, res) => {
     try {
       const data = createSlotRequestSchema.parse(req.body);
       const createdSlots = [];
@@ -1428,7 +1463,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/admin/update-slot", async (req, res) => {
+  app.put("/api/admin/update-slot", requireAdmin, async (req, res) => {
     try {
       const data = updateSlotRequestSchema.parse(req.body);
 
@@ -1495,7 +1530,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/admin/delete-slot", async (req, res) => {
+  app.post("/api/admin/delete-slot", requireAdmin, async (req, res) => {
     try {
       const data = deleteSlotRequestSchema.parse(req.body);
 
@@ -1524,7 +1559,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/admin/delete-slots-bulk", async (req, res) => {
+  app.post("/api/admin/delete-slots-bulk", requireAdmin, async (req, res) => {
     try {
       const { slotIds } = req.body;
       if (!Array.isArray(slotIds)) {
@@ -1564,7 +1599,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/admin/delete-slots-by-date", async (req, res) => {
+  app.post("/api/admin/delete-slots-by-date", requireAdmin, async (req, res) => {
     try {
       const { date } = req.body;
       if (!date) {
@@ -1604,15 +1639,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true, count: deletedCount, skipped: skippedCount });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
-    }
-  });
-
-  app.get("/api/admin/absences", async (req, res) => {
-    try {
-      const allAbsences = await storage.getAllAbsences();
-      res.json(allAbsences);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
     }
   });
 
