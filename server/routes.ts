@@ -65,20 +65,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   // Admin authentication endpoints
-  app.post("/api/admin/login", (req, res) => {
+  app.post("/api/admin/login", async (req, res) => {
     const { password } = req.body;
-    const adminPassword = process.env.ADMIN_PASSWORD;
+    
+    try {
+      const adminPasswordHash = await storage.getAdminPasswordHash();
 
-    if (!adminPassword) {
-      return res.status(500).json({ error: "管理者パスワードが設定されていません" });
-    }
+      if (!adminPasswordHash) {
+        return res.status(500).json({ error: "管理者パスワードが設定されていません" });
+      }
 
-    if (password === adminPassword) {
-      (req.session as any).isAdmin = true;
-      (req.session as any).adminLoginTime = Date.now();
-      res.json({ success: true });
-    } else {
-      res.status(401).json({ error: "パスワードが正しくありません" });
+      const isMatch = await import("bcryptjs").then(b => b.default.compare(password, adminPasswordHash));
+
+      if (isMatch) {
+        (req.session as any).isAdmin = true;
+        (req.session as any).adminLoginTime = Date.now();
+        res.json({ success: true });
+      } else {
+        res.status(401).json({ error: "パスワードが正しくありません" });
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   });
 
