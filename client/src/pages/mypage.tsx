@@ -266,7 +266,7 @@ function AbsenceHistorySection({
   // 振替予約がキャンセル可能かどうか
   const canCancelRequest = (request: MakeupRequest) => {
     if (request.status !== "確定") return false;
-    const slotTime = parseDbDateTime(request.toSlotStartDateTime);
+    const slotTime = new Date(request.toSlotStartDateTime);
     const now = new Date();
     return slotTime > now;
   };
@@ -334,7 +334,7 @@ function AbsenceHistorySection({
                             <StatusBadge status={activeRequest.status} />
                           </div>
                           <p className="text-sm">
-                            {format(parseDbDateTime(activeRequest.toSlotStartDateTime), "yyyy年M月d日(E) HH:mm", { locale: ja })}
+                            {format(new Date(activeRequest.toSlotStartDateTime), "yyyy年M月d日(E) HH:mm", { locale: ja })}
                           </p>
                         </div>
                         {canCancelRequest(activeRequest) && (
@@ -355,7 +355,7 @@ function AbsenceHistorySection({
                               <AlertDialogHeader>
                                 <AlertDialogTitle>振替予約をキャンセル</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  {activeRequest.childName}さんの{format(parseDbDateTime(activeRequest.toSlotStartDateTime), "M月d日(E) HH:mm", { locale: ja })}の振替予約をキャンセルしますか？
+                                  {activeRequest.childName}さんの{format(new Date(activeRequest.toSlotStartDateTime), "M月d日(E) HH:mm", { locale: ja })}の振替予約をキャンセルしますか？
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>

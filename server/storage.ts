@@ -65,6 +65,10 @@ export interface IStorage {
   updateClassSlot(id: string, data: Partial<InsertClassSlot>): Promise<ClassSlot | undefined>;
   deleteClassSlot(id: string): Promise<boolean>;
   countFutureSlots(): Promise<number>;
+  incrementClassSlotMakeup(id: string): Promise<ClassSlot | undefined>;
+  decrementClassSlotMakeup(id: string): Promise<ClassSlot | undefined>;
+  incrementClassSlotCurrent(id: string): Promise<ClassSlot | undefined>;
+  decrementClassSlotCurrent(id: string): Promise<ClassSlot | undefined>;
 
   // Absence operations
   getAbsenceById(id: string): Promise<Absence | undefined>;
@@ -315,6 +319,54 @@ export class DatabaseStorage implements IStorage {
       .from(classSlots)
       .where(gte(classSlots.lessonStartDateTime, now));
     return Number(result[0]?.count || 0);
+  }
+
+  async incrementClassSlotMakeup(id: string): Promise<ClassSlot | undefined> {
+    const [slot] = await db
+      .update(classSlots)
+      .set({
+        capacityMakeupUsed: sql`${classSlots.capacityMakeupUsed} + 1`,
+        updatedAt: new Date()
+      })
+      .where(eq(classSlots.id, id))
+      .returning();
+    return slot;
+  }
+
+  async decrementClassSlotMakeup(id: string): Promise<ClassSlot | undefined> {
+    const [slot] = await db
+      .update(classSlots)
+      .set({
+        capacityMakeupUsed: sql`GREATEST(0, ${classSlots.capacityMakeupUsed} - 1)`,
+        updatedAt: new Date()
+      })
+      .where(eq(classSlots.id, id))
+      .returning();
+    return slot;
+  }
+
+  async incrementClassSlotCurrent(id: string): Promise<ClassSlot | undefined> {
+    const [slot] = await db
+      .update(classSlots)
+      .set({
+        capacityCurrent: sql`${classSlots.capacityCurrent} + 1`,
+        updatedAt: new Date()
+      })
+      .where(eq(classSlots.id, id))
+      .returning();
+    return slot;
+  }
+
+  async decrementClassSlotCurrent(id: string): Promise<ClassSlot | undefined> {
+    const [slot] = await db
+      .update(classSlots)
+      .set({
+        capacityCurrent: sql`GREATEST(0, ${classSlots.capacityCurrent} - 1)`,
+        updatedAt: new Date()
+      })
+      .where(eq(classSlots.id, id))
+      .returning();
+    return slot;
   }
 
   // Absence operations

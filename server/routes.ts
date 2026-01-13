@@ -51,7 +51,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       store: new PgSession({
         conString: process.env.DATABASE_URL,
         tableName: "admin_sessions",
-        createTableIfMissing: false,
+        createTableIfMissing: true,
       }),
       secret: process.env.SESSION_SECRET || "hamasui-session-secret-2025",
       resave: false,
@@ -274,9 +274,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           const slot = await storage.getClassSlotById(request.toSlotId);
           if (slot) {
-            await storage.updateClassSlot(request.toSlotId, {
-              capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-            });
+            await storage.decrementClassSlotMakeup(request.toSlotId);
           }
         }
       }
@@ -284,9 +282,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (absence.originalSlotId) {
         const slot = await storage.getClassSlotById(absence.originalSlotId);
         if (slot) {
-          await storage.updateClassSlot(absence.originalSlotId, {
-            capacityCurrent: Math.max(0, slot.capacityCurrent - 1),
-          });
+          await storage.incrementClassSlotCurrent(absence.originalSlotId);
         }
       }
 
@@ -359,9 +355,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const slot = await storage.getClassSlotById(request.toSlotId);
         if (!slot) continue;
 
-        await storage.updateClassSlot(request.toSlotId, {
-          capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-        });
+        await storage.decrementClassSlotMakeup(request.toSlotId);
 
         await storage.updateRequest(request.id, { status: "却下" });
       }
@@ -369,9 +363,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // 元のレッスン枠に戻す
       const originalSlot = await storage.getClassSlotById(absence.originalSlotId);
       if (originalSlot) {
-        await storage.updateClassSlot(absence.originalSlotId, {
-          capacityCurrent: originalSlot.capacityCurrent + 1,
-        });
+        await storage.incrementClassSlotCurrent(absence.originalSlotId);
       }
 
       await storage.updateAbsence(absence.id, { makeupStatus: "EXPIRED" });
@@ -411,9 +403,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const slot = await storage.getClassSlotById(request.toSlotId);
 
       if (request.status === "確定" && slot) {
-        await storage.updateClassSlot(request.toSlotId, {
-          capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-        });
+        await storage.decrementClassSlotMakeup(request.toSlotId);
 
         if (request.absenceId) {
           await storage.updateAbsence(request.absenceId, { makeupStatus: "PENDING" });
@@ -594,9 +584,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (request.status === "確定") {
           const slot = await storage.getClassSlotById(request.toSlotId);
           if (slot) {
-            await storage.updateClassSlot(request.toSlotId, {
-              capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-            });
+            await storage.decrementClassSlotMakeup(request.toSlotId);
           }
           await storage.updateRequest(request.id, { status: "却下" });
         }
@@ -605,9 +593,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Restore original slot capacity
       const originalSlot = await storage.getClassSlotById(absence.originalSlotId);
       if (originalSlot) {
-        await storage.updateClassSlot(absence.originalSlotId, {
-          capacityCurrent: originalSlot.capacityCurrent + 1,
-        });
+        await storage.incrementClassSlotCurrent(absence.originalSlotId);
       }
 
       // Mark absence as expired
@@ -641,9 +627,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (request.status === "確定") {
         const slot = await storage.getClassSlotById(request.toSlotId);
         if (slot) {
-          await storage.updateClassSlot(request.toSlotId, {
-            capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-          });
+          await storage.decrementClassSlotMakeup(request.toSlotId);
         }
 
         // Reset absence status to PENDING if exists
@@ -769,9 +753,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         makeupStatus: "PENDING",
       });
 
-      await storage.updateClassSlot(data.originalSlotId, {
-        capacityCurrent: originalSlot.capacityCurrent - 1,
-      });
+      await storage.decrementClassSlotCurrent(data.originalSlotId);
 
       if (data.contactEmail) {
         try {
@@ -876,18 +858,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const slot = await storage.getClassSlotById(request.toSlotId);
         if (!slot) continue;
 
-        await storage.updateClassSlot(request.toSlotId, {
-          capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-        });
+        await storage.decrementClassSlotMakeup(request.toSlotId);
 
         await storage.updateRequest(request.id, { status: "却下" });
       }
 
       const originalSlot = await storage.getClassSlotById(absence.originalSlotId);
       if (originalSlot) {
-        await storage.updateClassSlot(absence.originalSlotId, {
-          capacityCurrent: originalSlot.capacityCurrent + 1,
-        });
+        await storage.incrementClassSlotCurrent(absence.originalSlotId);
       }
 
       await storage.updateAbsence(absence.id, { makeupStatus: "EXPIRED" });
@@ -1035,9 +1013,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         toSlotStartDateTime: slot.lessonStartDateTime,
       });
 
-      await storage.updateClassSlot(data.toSlotId, {
-        capacityMakeupUsed: (slot.capacityMakeupUsed || 0) + 1,
-      });
+      await storage.incrementClassSlotMakeup(data.toSlotId);
 
       if (contactEmail) {
         try {
@@ -1121,9 +1097,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.updateRequest(requestId, { status: "却下" });
 
       if (request.status === "確定" && slot) {
-        await storage.updateClassSlot(request.toSlotId, {
-          capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-        });
+        await storage.decrementClassSlotMakeup(request.toSlotId);
 
         if (request.absenceId) {
           await storage.updateAbsence(request.absenceId, { makeupStatus: "PENDING" });
@@ -1268,9 +1242,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const slot = await storage.getClassSlotById(request.toSlotId);
       if (slot) {
-        await storage.updateClassSlot(request.toSlotId, {
-          capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-        });
+        await storage.decrementClassSlotMakeup(request.toSlotId);
       }
 
 
@@ -1315,9 +1287,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const slot = await storage.getClassSlotById(request.toSlotId);
 
       if (request.status === "確定" && slot) {
-        await storage.updateClassSlot(request.toSlotId, {
-          capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-        });
+        await storage.decrementClassSlotMakeup(request.toSlotId);
 
         if (request.absenceId) {
           await storage.updateAbsence(request.absenceId, { makeupStatus: "PENDING" });
