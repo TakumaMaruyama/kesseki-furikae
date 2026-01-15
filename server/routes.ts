@@ -71,17 +71,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     throw new Error("SESSION_SECRET is required in production");
   }
 
-  // Check if admin password is set, auto-set from environment variable if not
-  const adminPasswordHash = await storage.getAdminPasswordHash();
-  if (!adminPasswordHash) {
-    const envPassword = process.env.ADMIN_PASSWORD;
-    if (envPassword) {
-      const bcrypt = await import("bcryptjs");
-      const salt = await bcrypt.default.genSalt(10);
-      const hash = await bcrypt.default.hash(envPassword, salt);
-      await storage.setAdminPasswordHash(hash);
-      console.log("✅ 環境変数ADMIN_PASSWORDから管理者パスワードを自動設定しました。");
-    } else {
+  // Always set admin password from environment variable if it exists
+  const envPassword = process.env.ADMIN_PASSWORD;
+  if (envPassword) {
+    const bcrypt = await import("bcryptjs");
+    const salt = await bcrypt.default.genSalt(10);
+    const hash = await bcrypt.default.hash(envPassword, salt);
+    await storage.setAdminPasswordHash(hash);
+    console.log("✅ 環境変数ADMIN_PASSWORDから管理者パスワードを設定しました。");
+  } else {
+    const adminPasswordHash = await storage.getAdminPasswordHash();
+    if (!adminPasswordHash) {
       console.warn("⚠️ 管理者パスワードが設定されていません。");
       console.warn("   環境変数ADMIN_PASSWORDを設定するか、以下のコマンドで設定してください:");
       console.warn("   npx tsx set-admin-password.ts <password>");
