@@ -13,6 +13,7 @@ import CancelPage from "@/pages/cancel";
 import DeclinePage from "@/pages/decline";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
+import { Settings } from "lucide-react";
 
 function MainRouter() {
   return (
@@ -66,14 +67,14 @@ function AppContent() {
   return (
     <>
       <MainRouter />
-      <div className="fixed bottom-6 right-6 z-50 flex gap-2">
+      <div className="fixed bottom-2 right-2 z-50 flex gap-2">
         {isStatus ? (
           <Link href="/absence">
             <Button
-              variant="outline"
-              size="lg"
+              variant="default"
+              size="sm"
               data-testid="link-absence"
-              className="h-12 px-6 text-base font-semibold shadow-lg"
+              className="shadow-sm"
             >
               欠席連絡
             </Button>
@@ -81,10 +82,10 @@ function AppContent() {
         ) : (
           <Link href="/status">
             <Button
-              variant="outline"
-              size="lg"
+              variant="default"
+              size="sm"
               data-testid="link-status"
-              className="h-12 px-6 text-base font-semibold shadow-lg"
+              className="bg-primary hover:bg-primary/90 shadow-sm"
             >
               予約確認
             </Button>
@@ -92,11 +93,13 @@ function AppContent() {
         )}
         <Link href="/admin">
           <Button
-            size="lg"
+            variant="ghost"
+            size="sm"
             data-testid="link-admin"
-            className="h-12 px-6 text-base font-semibold shadow-lg"
+            className="h-8 w-8 p-0 text-muted-foreground/30 hover:text-muted-foreground hover:bg-transparent"
           >
-            管理画面
+            <span className="sr-only">管理画面</span>
+            <Settings className="h-3 w-3" />
           </Button>
         </Link>
       </div>

@@ -230,15 +230,16 @@ export default function LoginPage() {
           </p>
         </CardContent>
       </Card>
-      <div className="fixed bottom-6 right-6 z-50">
+      <div className="fixed bottom-2 right-2 z-50">
         <a href="/admin">
           <Button
-            size="lg"
-            variant="outline"
+            variant="ghost"
+            size="sm"
             data-testid="link-admin"
-            className="h-12 px-6 text-base font-semibold shadow-lg"
+            className="h-8 w-8 p-0 text-muted-foreground/30 hover:text-muted-foreground hover:bg-transparent"
           >
-            管理画面
+            <span className="sr-only">管理画面</span>
+            <Lock className="h-3 w-3" />
           </Button>
         </a>
       </div>
