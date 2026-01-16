@@ -721,7 +721,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "クラス帯を指定してください。" });
       }
 
-      const targetDate = new Date(date);
+      const targetDate = new Date(date + "T00:00:00+09:00");
       const slots = await storage.getClassSlotsByDateAndClassBand(targetDate, classBand);
 
       const now = new Date();
@@ -745,7 +745,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/absences", async (req, res) => {
     try {
       const data = createAbsenceRequestSchema.parse(req.body);
-      const absentDate = new Date(data.absentDateISO);
+      const absentDate = new Date(data.absentDateISO + "T00:00:00+09:00");
 
       const originalSlot = await storage.getClassSlotById(data.originalSlotId);
       if (!originalSlot) {
@@ -951,7 +951,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const settings = await storage.getGlobalSettings();
       const makeupWindowDays = settings?.makeupWindowDays || 30;
 
-      const absentDate = new Date(data.absentDateISO);
+      const absentDate = new Date(data.absentDateISO + "T00:00:00+09:00");
       const startRange = new Date(absentDate);
       startRange.setDate(startRange.getDate() - makeupWindowDays);
       const endRange = new Date(absentDate);
@@ -1054,7 +1054,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         absenceId: data.absenceId || null,
         childName: data.childName,
         declaredClassBand: data.declaredClassBand,
-        absentDate: new Date(data.absentDateISO),
+        absentDate: new Date(data.absentDateISO + "T00:00:00+09:00"),
         toSlotId: data.toSlotId,
         status: "確定",
         contactEmail: contactEmail,
