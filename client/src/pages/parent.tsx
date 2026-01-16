@@ -36,13 +36,14 @@ type AbsenceData = {
 };
 
 // Helper to safely parse date string to local Date object avoiding timezone shifts
-const parseLocalDate = (dateStr: string) => {
+const parseLocalDate = (dateStr: any) => {
   if (!dateStr) return new Date();
   // If it's already a Date object, return it
   if (dateStr instanceof Date) return dateStr;
   
   // Handle ISO string or date only string
-  const datePart = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+  const dateStrStr = String(dateStr);
+  const datePart = dateStrStr.includes('T') ? dateStrStr.split('T')[0] : dateStrStr;
   const [year, month, day] = datePart.split('-').map(Number);
   return new Date(year, month - 1, day);
 };
