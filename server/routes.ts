@@ -497,7 +497,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "dateが必要です" });
       }
 
-      const targetDate = new Date(date);
+      const targetDate = new Date(date + "T00:00:00");
       const slots = await storage.getClassSlotsByDate(targetDate);
 
       const lessonsWithStatus = await Promise.all(
