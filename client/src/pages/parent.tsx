@@ -35,6 +35,18 @@ type AbsenceData = {
   confirmCode?: string;
 };
 
+// Helper to safely parse date string to local Date object avoiding timezone shifts
+const parseLocalDate = (dateStr: string) => {
+  if (!dateStr) return new Date();
+  // If it's already a Date object, return it
+  if (dateStr instanceof Date) return dateStr;
+  
+  // Handle ISO string or date only string
+  const datePart = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+  const [year, month, day] = datePart.split('-').map(Number);
+  return new Date(year, month - 1, day);
+};
+
 export default function ParentPage() {
   const token = useMemo(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -373,8 +385,8 @@ export default function ParentPage() {
                     <div className="space-y-1 text-sm text-muted-foreground">
                       <p>お子様の名前: <span className="font-medium text-foreground">{absenceData.childName}</span></p>
                       <p>クラス帯: <span className="font-medium text-foreground">{absenceData.declaredClassBand}</span></p>
-                      <p>欠席日: <span className="font-medium text-foreground">{format(new Date(absenceData.absentDate), "yyyy年M月d日(E)", { locale: ja })}</span></p>
-                      <p>振替期限: <span className="font-medium text-foreground">{format(new Date(absenceData.makeupDeadline), "yyyy年M月d日", { locale: ja })}</span></p>
+                      <p>欠席日: <span className="font-medium text-foreground">{format(parseLocalDate(absenceData.absentDate), "yyyy年M月d日(E)", { locale: ja })}</span></p>
+                      <p>振替期限: <span className="font-medium text-foreground">{format(parseLocalDate(absenceData.makeupDeadline), "yyyy年M月d日", { locale: ja })}</span></p>
                     </div>
                   </div>
                 </div>
@@ -569,7 +581,7 @@ export default function ParentPage() {
                     </div>
                     <div>
                       <p className="text-muted-foreground mb-1">欠席日</p>
-                      <p className="font-semibold">{format(new Date(absenceData.absentDate), "yyyy/MM/dd (E)", { locale: ja })}</p>
+                      <p className="font-semibold">{format(parseLocalDate(absenceData.absentDate), "yyyy/MM/dd (E)", { locale: ja })}</p>
                     </div>
                   </div>
                   <p className="text-xs text-muted-foreground mt-4">
@@ -668,7 +680,7 @@ export default function ParentPage() {
                               {format(selectedDate, "yyyy年M月d日(E)", { locale: ja })}の振替枠
                             </p>
                             {slots
-                              .filter(s => format(new Date(s.date), "yyyy-MM-dd") === format(selectedDate, "yyyy-MM-dd"))
+                              .filter(s => format(parseLocalDate(s.date), "yyyy-MM-dd") === format(selectedDate, "yyyy-MM-dd"))
                               .map(slot => (
                                 <SlotCard
                                   key={slot.slotId}
@@ -678,7 +690,7 @@ export default function ParentPage() {
                                 />
                               ))
                             }
-                            {slots.filter(s => format(new Date(s.date), "yyyy-MM-dd") === format(selectedDate, "yyyy-MM-dd")).length === 0 && (
+                            {slots.filter(s => format(parseLocalDate(s.date), "yyyy-MM-dd") === format(selectedDate, "yyyy-MM-dd")).length === 0 && (
                               <p className="text-muted-foreground text-sm">この日に利用可能な枠はありません</p>
                             )}
                           </>
@@ -785,7 +797,7 @@ function SlotCard({ slot, onBook, absenceId }: SlotCardProps) {
             <div className="flex items-center gap-2 mb-2">
               <CalendarIcon className="w-4 h-4 text-muted-foreground" />
               <span className="font-semibold text-base">
-                {format(new Date(slot.date), "yyyy年M月d日(E)", { locale: ja })}
+                {format(parseLocalDate(slot.date), "yyyy年M月d日(E)", { locale: ja })}
               </span>
             </div>
             <div className="flex items-center gap-2">
