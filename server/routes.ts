@@ -1383,13 +1383,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const createdSlots = [];
 
       if (data.isRecurring && data.recurringWeeks) {
-        const startDate = new Date(data.date);
+        const startDate = new Date(data.date + "T00:00:00+09:00");
 
         for (let week = 0; week < data.recurringWeeks; week++) {
-          const currentDate = new Date(startDate);
-          currentDate.setDate(startDate.getDate() + (week * 7));
+          const currentDate = addDays(startDate, week * 7);
 
-          const dateStr = currentDate.toISOString().split('T')[0];
+          const dateStr = format(currentDate, "yyyy-MM-dd");
 
           for (const classBand of data.classBands) {
             const dateTime = new Date(`${dateStr}T${data.startTime}:00+09:00`);
@@ -1430,9 +1429,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           slots: createdSlots
         });
       } else {
+        const slotDate = new Date(data.date + "T00:00:00+09:00");
+        const dateStr = format(slotDate, "yyyy-MM-dd");
+        
         for (const classBand of data.classBands) {
-          const dateTime = new Date(`${data.date}T${data.startTime}:00+09:00`);
-          const slotId = `${data.date}_${data.startTime}_${classBand === "初級" ? "shokyu" : classBand === "中級" ? "chukyu" : "jokyu"}`;
+          const dateTime = new Date(`${dateStr}T${data.startTime}:00+09:00`);
+          const slotId = `${dateStr}_${data.startTime}_${classBand === "初級" ? "shokyu" : classBand === "中級" ? "chukyu" : "jokyu"}`;
 
           const existing = await storage.getClassSlotById(slotId);
           if (existing) {
@@ -1446,7 +1448,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           const slot = await storage.createClassSlot({
             id: slotId,
-            date: new Date(data.date),
+            date: slotDate,
             startTime: data.startTime,
             courseLabel: data.courseLabel,
             classBand: classBand,
