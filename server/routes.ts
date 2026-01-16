@@ -721,7 +721,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "クラス帯を指定してください。" });
       }
 
-      const targetDate = new Date(date + "T00:00:00+09:00");
+      const targetDate = new Date(date + "T00:00:00");
       const slots = await storage.getClassSlotsByDateAndClassBand(targetDate, classBand);
 
       const now = new Date();
@@ -745,7 +745,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/absences", async (req, res) => {
     try {
       const data = createAbsenceRequestSchema.parse(req.body);
-      const absentDate = new Date(data.absentDateISO + "T00:00:00+09:00");
+      const absentDate = new Date(data.absentDateISO + "T00:00:00");
 
       const originalSlot = await storage.getClassSlotById(data.originalSlotId);
       if (!originalSlot) {
@@ -951,7 +951,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const settings = await storage.getGlobalSettings();
       const makeupWindowDays = settings?.makeupWindowDays || 30;
 
-      const absentDate = new Date(data.absentDateISO + "T00:00:00+09:00");
+      const absentDate = new Date(data.absentDateISO + "T00:00:00");
       const startRange = new Date(absentDate);
       startRange.setDate(startRange.getDate() - makeupWindowDays);
       const endRange = new Date(absentDate);
@@ -1054,7 +1054,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         absenceId: data.absenceId || null,
         childName: data.childName,
         declaredClassBand: data.declaredClassBand,
-        absentDate: new Date(data.absentDateISO + "T00:00:00+09:00"),
+        absentDate: new Date(data.absentDateISO + "T00:00:00"),
         toSlotId: data.toSlotId,
         status: "確定",
         contactEmail: contactEmail,
@@ -1383,7 +1383,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const createdSlots = [];
 
       if (data.isRecurring && data.recurringWeeks) {
-        const startDate = new Date(data.date + "T00:00:00+09:00");
+        const startDate = new Date(data.date + "T00:00:00");
 
         for (let week = 0; week < data.recurringWeeks; week++) {
           const currentDate = addDays(startDate, week * 7);
@@ -1391,7 +1391,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const dateStr = format(currentDate, "yyyy-MM-dd");
 
           for (const classBand of data.classBands) {
-            const dateTime = new Date(`${dateStr}T${data.startTime}:00+09:00`);
+            const dateTime = new Date(`${dateStr}T${data.startTime}:00`);
             const slotId = `${dateStr}_${data.startTime}_${classBand === "初級" ? "shokyu" : classBand === "中級" ? "chukyu" : "jokyu"}`;
 
             const existing = await storage.getClassSlotById(slotId);
@@ -1429,11 +1429,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           slots: createdSlots
         });
       } else {
-        const slotDate = new Date(data.date + "T00:00:00+09:00");
+        const slotDate = new Date(data.date + "T00:00:00");
         const dateStr = format(slotDate, "yyyy-MM-dd");
         
         for (const classBand of data.classBands) {
-          const dateTime = new Date(`${dateStr}T${data.startTime}:00+09:00`);
+          const dateTime = new Date(`${dateStr}T${data.startTime}:00`);
           const slotId = `${dateStr}_${data.startTime}_${classBand === "初級" ? "shokyu" : classBand === "中級" ? "chukyu" : "jokyu"}`;
 
           const existing = await storage.getClassSlotById(slotId);
@@ -1493,12 +1493,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (data.capacityCurrent !== undefined) updateData.capacityCurrent = data.capacityCurrent;
 
       if (data.date && data.startTime) {
-        updateData.lessonStartDateTime = new Date(`${data.date}T${data.startTime}:00+09:00`);
+        updateData.lessonStartDateTime = new Date(`${data.date}T${data.startTime}:00`);
       } else if (data.date) {
-        updateData.lessonStartDateTime = new Date(`${data.date}T${existing.startTime}:00+09:00`);
+        updateData.lessonStartDateTime = new Date(`${data.date}T${existing.startTime}:00`);
       } else if (data.startTime) {
-        const dateStr = existing.date.toISOString().split('T')[0];
-        updateData.lessonStartDateTime = new Date(`${dateStr}T${data.startTime}:00+09:00`);
+        const dateStr = format(existing.date, "yyyy-MM-dd");
+        updateData.lessonStartDateTime = new Date(`${dateStr}T${data.startTime}:00`);
       }
 
       if (data.applyToFuture) {
