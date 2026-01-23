@@ -18,17 +18,7 @@ export function DashboardOverview() {
     }
 
     return (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <Card className="border-2">
-                <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium text-muted-foreground">本日のレッスン</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <p className="text-3xl font-bold">{stats?.todayLessons || 0}</p>
-                    <p className="text-xs text-muted-foreground mt-1">件</p>
-                </CardContent>
-            </Card>
-
+        <div className="grid grid-cols-2 gap-4">
             <Card className="border-2 border-destructive/30">
                 <CardHeader className="pb-2">
                     <CardTitle className="text-sm font-medium text-destructive">本日の欠席</CardTitle>
@@ -46,26 +36,6 @@ export function DashboardOverview() {
                 <CardContent>
                     <p className="text-3xl font-bold text-primary">{stats?.todayMakeups || 0}</p>
                     <p className="text-xs text-muted-foreground mt-1">名</p>
-                </CardContent>
-            </Card>
-
-            <Card className="border-2 border-amber-500/30">
-                <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium text-amber-600">振替待ち</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <p className="text-3xl font-bold text-amber-600">{stats?.pendingAbsences || 0}</p>
-                    <p className="text-xs text-muted-foreground mt-1">件</p>
-                </CardContent>
-            </Card>
-
-            <Card className="border-2">
-                <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium text-muted-foreground">今後の枠</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <p className="text-3xl font-bold">{stats?.futureSlots || 0}</p>
-                    <p className="text-xs text-muted-foreground mt-1">件</p>
                 </CardContent>
             </Card>
         </div>
