@@ -27,11 +27,11 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
   const sess = req.session as any;
   const isAdmin = sess?.isAdmin === true;
   const loginTime = sess?.adminLoginTime;
-  
+
   // Session expires after 24 hours
   const sessionDuration = 24 * 60 * 60 * 1000;
   const isExpired = loginTime && (Date.now() - loginTime > sessionDuration);
-  
+
   if (isAdmin && !isExpired) {
     next();
   } else {
@@ -112,7 +112,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin authentication endpoints
   app.post("/api/admin/login", async (req, res) => {
     const { password } = req.body;
-    
+
     try {
       const adminPasswordHash = await storage.getAdminPasswordHash();
 
@@ -612,6 +612,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
         todayLessons: todaySlots.length,
       });
     } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Admin: Daily status - get absences and makeups for a specific date
+  app.get("/api/admin/daily-status", requireAdmin, async (req, res) => {
+    try {
+      const { date } = req.query;
+
+      // Use today's date if not specified
+      const targetDate = date && typeof date === 'string'
+        ? new Date(date + "T00:00:00")
+        : (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
+
+      // Get all slots for the target date
+      const slots = await storage.getClassSlotsByDate(targetDate);
+
+      // Collect absences (students absent from this date's lessons)
+      const absentees: Array<{
+        childName: string;
+        courseLabel: string;
+        classBand: string;
+        startTime: string;
+      }> = [];
+
+      // Collect makeups (students transferring TO this date's lessons)
+      const makeups: Array<{
+        childName: string;
+        courseLabel: string;
+        classBand: string;
+        startTime: string;
+      }> = [];
+
+      for (const slot of slots) {
+        // Get absences for this slot
+        const slotAbsences = await storage.getAbsencesByOriginalSlotId(slot.id);
+        for (const absence of slotAbsences) {
+          absentees.push({
+            childName: absence.childName,
+            courseLabel: slot.courseLabel,
+            classBand: slot.classBand,
+            startTime: slot.startTime,
+          });
+        }
+
+        // Get confirmed makeup requests for this slot
+        const slotMakeups = await storage.getConfirmedRequestsBySlotId(slot.id);
+        for (const request of slotMakeups) {
+          makeups.push({
+            childName: request.childName,
+            courseLabel: slot.courseLabel,
+            classBand: slot.classBand,
+            startTime: slot.startTime,
+          });
+        }
+      }
+
+      // Sort by startTime, then by childName
+      const sortFn = (a: any, b: any) => {
+        const timeCompare = a.startTime.localeCompare(b.startTime);
+        if (timeCompare !== 0) return timeCompare;
+        return a.childName.localeCompare(b.childName);
+      };
+
+      absentees.sort(sortFn);
+      makeups.sort(sortFn);
+
+      res.json({
+        date: format(targetDate, "yyyy-MM-dd"),
+        absentees,
+        makeups,
+      });
+    } catch (error: any) {
+      console.error("Daily status error:", error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -1431,7 +1505,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         const slotDate = new Date(data.date + "T00:00:00");
         const dateStr = format(slotDate, "yyyy-MM-dd");
-        
+
         for (const classBand of data.classBands) {
           const dateTime = new Date(`${dateStr}T${data.startTime}:00`);
           const slotId = `${dateStr}_${data.startTime}_${classBand === "初級" ? "shokyu" : classBand === "中級" ? "chukyu" : "jokyu"}`;

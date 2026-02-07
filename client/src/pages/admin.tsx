@@ -16,6 +16,7 @@ import { Calendar } from "@/components/ui/calendar";
 import {
   AdminLoginForm,
   DashboardOverview,
+  DailyStatusView,
   HistoryView,
   CoursesManagement,
   LessonsStatusView,
@@ -309,8 +310,11 @@ export default function AdminPage() {
           <DashboardOverview />
         </div>
 
-        <Tabs defaultValue="lessons" className="w-full">
-          <TabsList className="grid w-full max-w-4xl grid-cols-4 h-12">
+        <Tabs defaultValue="daily-status" className="w-full">
+          <TabsList className="grid w-full max-w-5xl grid-cols-5 h-12">
+            <TabsTrigger value="daily-status" data-testid="tab-daily-status" className="text-base">
+              本日の状況
+            </TabsTrigger>
             <TabsTrigger value="lessons" data-testid="tab-lessons" className="text-base">
               レッスン状況
             </TabsTrigger>
@@ -324,6 +328,10 @@ export default function AdminPage() {
               履歴
             </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="daily-status" className="mt-6">
+            <DailyStatusView />
+          </TabsContent>
 
           <TabsContent value="lessons" className="mt-6">
             <LessonsStatusView />
