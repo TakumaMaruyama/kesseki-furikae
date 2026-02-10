@@ -21,6 +21,15 @@ import { format, addDays } from "date-fns";
 import { ja } from "date-fns/locale";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
+import {
+  addJstDays,
+  endOfJstDay,
+  formatJstDate,
+  getJstDayOfWeek,
+  parseJstDate,
+  parseJstDateTime,
+  startOfJstDay,
+} from "@shared/jst";
 
 // Admin authentication middleware
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -497,7 +506,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "dateが必要です" });
       }
 
-      const targetDate = new Date(date + "T00:00:00");
+      const targetDate = parseJstDate(date);
       const slots = await storage.getClassSlotsByDate(targetDate);
 
       const lessonsWithStatus = await Promise.all(
@@ -578,10 +587,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin: Dashboard stats
   app.get("/api/admin/dashboard-stats", requireAdmin, async (req, res) => {
     try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
+      const today = startOfJstDay(new Date());
 
       // Get today's slots
       const todaySlots = await storage.getClassSlotsByDate(today);
@@ -795,7 +801,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "クラス帯を指定してください。" });
       }
 
-      const targetDate = new Date(date + "T00:00:00");
+      const targetDate = parseJstDate(date);
       const slots = await storage.getClassSlotsByDateAndClassBand(targetDate, classBand);
 
       const now = new Date();
@@ -803,12 +809,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         success: true,
         slots: slots.map(slot => ({
           id: slot.id,
-          date: format(slot.date, "yyyy-MM-dd"),
+          date: formatJstDate(slot.date),
           startTime: slot.startTime,
           courseLabel: slot.courseLabel,
           classBand: slot.classBand,
           lessonStartDateTime: slot.lessonStartDateTime?.toISOString() || null,
-          isPastLesson: slot.lessonStartDateTime ? new Date(slot.lessonStartDateTime) <= now : false,
+          isPastLesson: slot.lessonStartDateTime ? slot.lessonStartDateTime <= now : false,
         }))
       });
     } catch (error: any) {
@@ -819,7 +825,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/absences", async (req, res) => {
     try {
       const data = createAbsenceRequestSchema.parse(req.body);
-      const absentDate = new Date(data.absentDateISO + "T00:00:00");
+      const absentDate = parseJstDate(data.absentDateISO);
 
       const originalSlot = await storage.getClassSlotById(data.originalSlotId);
       if (!originalSlot) {
@@ -828,7 +834,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      const slotDateStr = format(originalSlot.date, "yyyy-MM-dd");
+      const slotDateStr = formatJstDate(originalSlot.date);
       if (slotDateStr !== data.absentDateISO) {
         return res.status(400).json({
           error: "選択したレッスン枠の日付が欠席日と一致しません。"
@@ -843,7 +849,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Check if lesson time has already passed (fraud prevention)
       const now = new Date();
-      if (originalSlot.lessonStartDateTime && new Date(originalSlot.lessonStartDateTime) <= now) {
+      if (originalSlot.lessonStartDateTime && originalSlot.lessonStartDateTime <= now) {
         return res.status(400).json({
           error: "レッスン開始時刻を過ぎているため、欠席連絡を登録できません。"
         });
@@ -857,8 +863,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const settings = await storage.getGlobalSettings();
       const makeupWindowDays = settings?.makeupWindowDays || 30;
 
-      const makeupDeadline = new Date(absentDate);
-      makeupDeadline.setDate(makeupDeadline.getDate() + makeupWindowDays);
+      const makeupDeadline = addJstDays(absentDate, makeupWindowDays);
 
       const resumeToken = createId();
       const absenceId = createId();
@@ -905,7 +910,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         absenceId: absence.id,
         resumeToken: resumeToken,
         confirmCode: confirmCode,
-        makeupDeadline: format(makeupDeadline, "yyyy-MM-dd"),
+        makeupDeadline: formatJstDate(makeupDeadline),
       });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -925,10 +930,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         id: absence.id,
         childName: absence.childName,
         declaredClassBand: absence.declaredClassBand,
-        absentDate: format(absence.absentDate, "yyyy-MM-dd"),
+        absentDate: formatJstDate(absence.absentDate),
         originalSlotId: absence.originalSlotId,
         contactEmail: absence.contactEmail,
-        makeupDeadline: format(absence.makeupDeadline, "yyyy-MM-dd"),
+        makeupDeadline: formatJstDate(absence.makeupDeadline),
         makeupStatus: absence.makeupStatus,
       });
     } catch (error: any) {
@@ -1025,11 +1030,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const settings = await storage.getGlobalSettings();
       const makeupWindowDays = settings?.makeupWindowDays || 30;
 
-      const absentDate = new Date(data.absentDateISO + "T00:00:00");
-      const startRange = new Date(absentDate);
-      startRange.setDate(startRange.getDate() - makeupWindowDays);
-      const endRange = new Date(absentDate);
-      endRange.setDate(endRange.getDate() + makeupWindowDays);
+      const absentDate = parseJstDate(data.absentDateISO);
+      const startRange = addJstDays(absentDate, -makeupWindowDays);
+      const endRange = endOfJstDay(addJstDays(absentDate, makeupWindowDays));
 
       const allSlots = await storage.getClassSlotsByDateRange(startRange, endRange);
       const now = new Date();
@@ -1057,7 +1060,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         return {
           slotId: slot.id,
-          date: format(slot.date, "yyyy-MM-dd"),
+          date: formatJstDate(slot.date),
           startTime: slot.startTime,
           courseLabel: slot.courseLabel,
           classBand: slot.classBand,
@@ -1128,7 +1131,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         absenceId: data.absenceId || null,
         childName: data.childName,
         declaredClassBand: data.declaredClassBand,
-        absentDate: new Date(data.absentDateISO + "T00:00:00"),
+        absentDate: parseJstDate(data.absentDateISO),
         toSlotId: data.toSlotId,
         status: "確定",
         contactEmail: contactEmail,
@@ -1457,15 +1460,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const createdSlots = [];
 
       if (data.isRecurring && data.recurringWeeks) {
-        const startDate = new Date(data.date + "T00:00:00");
+        const startDate = parseJstDate(data.date);
 
         for (let week = 0; week < data.recurringWeeks; week++) {
           const currentDate = addDays(startDate, week * 7);
 
-          const dateStr = format(currentDate, "yyyy-MM-dd");
+          const dateStr = formatJstDate(currentDate);
 
           for (const classBand of data.classBands) {
-            const dateTime = new Date(`${dateStr}T${data.startTime}:00`);
+            const dateTime = parseJstDateTime(dateStr, data.startTime);
             const slotId = `${dateStr}_${data.startTime}_${classBand === "初級" ? "shokyu" : classBand === "中級" ? "chukyu" : "jokyu"}`;
 
             const existing = await storage.getClassSlotById(slotId);
@@ -1503,11 +1506,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           slots: createdSlots
         });
       } else {
-        const slotDate = new Date(data.date + "T00:00:00");
-        const dateStr = format(slotDate, "yyyy-MM-dd");
-
+        const slotDate = parseJstDate(data.date);
+        const dateStr = formatJstDate(slotDate);
+        
         for (const classBand of data.classBands) {
-          const dateTime = new Date(`${dateStr}T${data.startTime}:00`);
+          const dateTime = parseJstDateTime(dateStr, data.startTime);
           const slotId = `${dateStr}_${data.startTime}_${classBand === "初級" ? "shokyu" : classBand === "中級" ? "chukyu" : "jokyu"}`;
 
           const existing = await storage.getClassSlotById(slotId);
@@ -1559,7 +1562,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const updateData: any = {};
-      if (data.date) updateData.date = new Date(data.date);
+      if (data.date) updateData.date = parseJstDate(data.date);
       if (data.startTime) updateData.startTime = data.startTime;
       if (data.courseLabel) updateData.courseLabel = data.courseLabel;
       if (data.classBand) updateData.classBand = data.classBand;
@@ -1567,17 +1570,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (data.capacityCurrent !== undefined) updateData.capacityCurrent = data.capacityCurrent;
 
       if (data.date && data.startTime) {
-        updateData.lessonStartDateTime = new Date(`${data.date}T${data.startTime}:00`);
+        updateData.lessonStartDateTime = parseJstDateTime(data.date, data.startTime);
       } else if (data.date) {
-        updateData.lessonStartDateTime = new Date(`${data.date}T${existing.startTime}:00`);
+        updateData.lessonStartDateTime = parseJstDateTime(data.date, existing.startTime);
       } else if (data.startTime) {
-        const dateStr = format(existing.date, "yyyy-MM-dd");
-        updateData.lessonStartDateTime = new Date(`${dateStr}T${data.startTime}:00`);
+        const dateStr = formatJstDate(existing.date);
+        updateData.lessonStartDateTime = parseJstDateTime(dateStr, data.startTime);
       }
 
       if (data.applyToFuture) {
         const currentDate = existing.date;
-        const dayOfWeek = currentDate.getDay();
+        const dayOfWeek = getJstDayOfWeek(currentDate);
 
         const allSlots = await db.select().from(classSlots)
           .where(and(
@@ -1587,7 +1590,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             gte(classSlots.date, currentDate)
           ));
 
-        const sameDaySlots = allSlots.filter(slot => slot.date.getDay() === dayOfWeek);
+        const sameDaySlots = allSlots.filter(slot => getJstDayOfWeek(slot.date) === dayOfWeek);
 
         let updatedCount = 0;
         for (const slot of sameDaySlots) {
@@ -1694,7 +1697,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const allSlots = await storage.getAllClassSlots();
       const slotsOnDate = allSlots.filter(slot => {
-        const slotDate = new Date(slot.date).toISOString().split('T')[0];
+        const slotDate = formatJstDate(slot.date);
         return slotDate === date;
       });
 
@@ -1759,7 +1762,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/holidays", async (req, res) => {
     try {
       const { date, name } = req.body;
-      const holiday = await storage.createHoliday({ date: new Date(date), name });
+      const holiday = await storage.createHoliday({ date: parseJstDate(date), name });
       res.json(holiday);
     } catch (error: any) {
       res.status(400).json({ error: error.message });

@@ -21,6 +21,7 @@ import { Link } from "wouter";
 import { Calendar } from "@/components/ui/calendar";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { addJstDays, formatJstDate, parseJstDate } from "@shared/jst";
 
 type AbsenceData = {
   id: string;
@@ -65,6 +66,11 @@ export default function ParentPage() {
   const [confirmCode, setConfirmCode] = useState<string | null>(null);
   const [availableSlotsForAbsence, setAvailableSlotsForAbsence] = useState<any[]>([]);
   const [slotsLoaded, setSlotsLoaded] = useState(false);
+
+  const isMakeupDeadlineOpen = (deadlineISO: string) => {
+    const deadlineEndExclusive = addJstDays(parseJstDate(deadlineISO), 1);
+    return deadlineEndExclusive > new Date();
+  };
 
   const absenceForm = useForm<CreateAbsenceRequest>({
     resolver: zodResolver(createAbsenceRequestSchema),
@@ -137,7 +143,7 @@ export default function ParentPage() {
         absenceId: absenceData?.id,
       });
       if (absentDate) {
-        setSelectedDate(new Date(absentDate));
+        setSelectedDate(parseJstDate(absentDate));
       }
       setViewMode("calendar");
     } catch (error) {
@@ -391,7 +397,7 @@ export default function ParentPage() {
                     </div>
                   </div>
                 </div>
-                {new Date(absenceData.makeupDeadline) >= new Date() && (
+                {isMakeupDeadlineOpen(absenceData.makeupDeadline) && (
                   <Button
                     onClick={handleCancelAbsence}
                     variant="outline"
@@ -562,7 +568,7 @@ export default function ParentPage() {
                   すでに振替予約が確定済みです。別の枠への変更は事務局へお問い合わせください。
                 </CardContent>
               </Card>
-            ) : new Date(absenceData.makeupDeadline) < new Date() ? (
+            ) : !isMakeupDeadlineOpen(absenceData.makeupDeadline) ? (
               <Card className="border-2 bg-muted/40">
                 <CardContent className="p-12 text-center text-muted-foreground">
                   振替の受付期限が過ぎています。新しい欠席連絡からやり直してください。
@@ -600,7 +606,7 @@ export default function ParentPage() {
           )}
         </section>
 
-        {searchParams2 && absenceData && new Date(absenceData.makeupDeadline) >= new Date() && (
+        {searchParams2 && absenceData && isMakeupDeadlineOpen(absenceData.makeupDeadline) && (
           <section>
             <h2 className="text-2xl font-semibold mb-6">検索結果</h2>
 
@@ -666,7 +672,7 @@ export default function ParentPage() {
                           selected={selectedDate}
                           onSelect={setSelectedDate}
                           modifiers={{
-                            hasSlots: slots.map(s => new Date(s.date)),
+                            hasSlots: slots.map(s => parseJstDate(formatJstDate(s.date))),
                           }}
                           modifiersClassNames={{
                             hasSlots: "bg-primary/20 text-primary-foreground font-bold",
@@ -681,7 +687,7 @@ export default function ParentPage() {
                               {format(selectedDate, "yyyy年M月d日(E)", { locale: ja })}の振替枠
                             </p>
                             {slots
-                              .filter(s => format(parseLocalDate(s.date), "yyyy-MM-dd") === format(selectedDate, "yyyy-MM-dd"))
+                              .filter(s => formatJstDate(s.date) === formatJstDate(selectedDate))
                               .map(slot => (
                                 <SlotCard
                                   key={slot.slotId}
@@ -691,7 +697,7 @@ export default function ParentPage() {
                                 />
                               ))
                             }
-                            {slots.filter(s => format(parseLocalDate(s.date), "yyyy-MM-dd") === format(selectedDate, "yyyy-MM-dd")).length === 0 && (
+                            {slots.filter(s => formatJstDate(s.date) === formatJstDate(selectedDate)).length === 0 && (
                               <p className="text-muted-foreground text-sm">この日に利用可能な枠はありません</p>
                             )}
                           </>

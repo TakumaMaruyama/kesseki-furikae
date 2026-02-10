@@ -24,6 +24,7 @@ import {
   type InsertHoliday,
   type GlobalSettings,
 } from "@shared/schema";
+import { addJstDays, endOfJstDay, startOfJstDay } from "@shared/jst";
 import { db } from "./db";
 import { eq, and, gte, lte, lt, asc, desc, sql } from "drizzle-orm";
 
@@ -268,18 +269,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getClassSlotsByDate(date: Date): Promise<ClassSlot[]> {
-    const nextDay = new Date(date);
-    nextDay.setDate(nextDay.getDate() + 1);
+    const dayStart = startOfJstDay(date);
+    const nextDay = addJstDays(dayStart, 1);
     return db.select().from(classSlots)
-      .where(and(gte(classSlots.date, date), lt(classSlots.date, nextDay)))
+      .where(and(gte(classSlots.date, dayStart), lt(classSlots.date, nextDay)))
       .orderBy(asc(classSlots.startTime));
   }
 
   async getClassSlotsByDateAndClassBand(date: Date, classBand: string): Promise<ClassSlot[]> {
-    const dayStart = new Date(date);
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(date);
-    dayEnd.setHours(23, 59, 59, 999);
+    const dayStart = startOfJstDay(date);
+    const dayEnd = endOfJstDay(date);
 
     return db.select().from(classSlots)
       .where(and(
@@ -479,10 +478,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getHolidayByDate(date: Date): Promise<Holiday | undefined> {
-    const dayStart = new Date(date);
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(date);
-    dayEnd.setHours(23, 59, 59, 999);
+    const dayStart = startOfJstDay(date);
+    const dayEnd = endOfJstDay(date);
 
     const [holiday] = await db.select().from(holidays)
       .where(and(gte(holidays.date, dayStart), lte(holidays.date, dayEnd)));

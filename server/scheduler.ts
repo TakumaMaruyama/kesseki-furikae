@@ -1,13 +1,19 @@
 import cron from "node-cron";
 import { db } from "./db";
-import { classSlots, absences } from "@shared/schema";
+import { classSlots } from "@shared/schema";
 import { and, gte, lte } from "drizzle-orm";
+import { JST_TIME_ZONE } from "@shared/jst";
 
 export function startScheduler() {
   // 定期的な欠席期限チェックのみ実行（順番待ち機能は削除済み）
   cron.schedule("*/30 * * * *", async () => {
-    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
-    const currentHour = now.getHours();
+    const now = new Date();
+    const hourFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: JST_TIME_ZONE,
+      hour: "2-digit",
+      hour12: false,
+    });
+    const currentHour = Number(hourFormatter.format(now));
 
     if (currentHour < 9 || currentHour >= 21) {
       return;

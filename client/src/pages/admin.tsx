@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ListIcon, CalendarIcon, InfoIcon, LogOutIcon, Loader2 } from "lucide-react";
 import type { ClassSlot } from "@shared/schema";
+import { formatJstDate, parseJstDate } from "@shared/jst";
 import { Calendar } from "@/components/ui/calendar";
 
 // Import extracted admin components
@@ -237,10 +238,9 @@ export default function AdminPage() {
   };
 
   const handleDeleteDay = (date: Date) => {
-    const dateStr = date.toISOString().split('T')[0];
+    const dateStr = formatJstDate(date);
     const daySlots = allSlots?.filter(slot => {
-      const slotDate = new Date(slot.date);
-      return slotDate.toISOString().split('T')[0] === dateStr;
+      return formatJstDate(slot.date as Date | string) === dateStr;
     }) || [];
 
     if (daySlots.length === 0) {
@@ -427,7 +427,7 @@ export default function AdminPage() {
                         className="rounded-md border"
                         locale={ja}
                         modifiers={{
-                          hasSlots: allSlots.map(slot => new Date(slot.date)),
+                          hasSlots: allSlots.map(slot => parseJstDate(formatJstDate(slot.date as Date | string))),
                         }}
                         modifiersStyles={{
                           hasSlots: {
@@ -439,15 +439,10 @@ export default function AdminPage() {
                     </div>
                     <div className="space-y-4">
                       {selectedDate && (() => {
-                        const selectedYear = selectedDate.getFullYear();
-                        const selectedMonth = selectedDate.getMonth();
-                        const selectedDay = selectedDate.getDate();
+                        const selectedDateKey = formatJstDate(selectedDate);
 
                         const daySlots = allSlots.filter(slot => {
-                          const slotDate = new Date(slot.date);
-                          return slotDate.getFullYear() === selectedYear &&
-                            slotDate.getMonth() === selectedMonth &&
-                            slotDate.getDate() === selectedDay;
+                          return formatJstDate(slot.date as Date | string) === selectedDateKey;
                         });
 
                         if (daySlots.length === 0) {
@@ -557,7 +552,7 @@ export default function AdminPage() {
                     {(() => {
                       // 日付でグループ化
                       const slotsByDate = allSlots.reduce((acc, slot) => {
-                        const dateKey = new Date(slot.date).toISOString().split('T')[0];
+                        const dateKey = formatJstDate(slot.date as Date | string);
                         if (!acc[dateKey]) {
                           acc[dateKey] = [];
                         }
@@ -570,7 +565,7 @@ export default function AdminPage() {
 
                       return sortedDates.map((dateKey) => {
                         const slots = slotsByDate[dateKey];
-                        const date = new Date(dateKey);
+                        const date = parseJstDate(dateKey);
 
                         return (
                           <div key={dateKey} className="border-2 rounded-lg overflow-hidden">
