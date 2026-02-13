@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ClassSlot, Course } from "@shared/schema";
+import { formatJstDate } from "@shared/jst";
 
 export type SlotDialogProps = {
     slot: ClassSlot | null;
@@ -40,7 +41,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
         defaultValues: slot
             ? {
                 courseId: "",
-                date: new Date(slot.date).toISOString().split("T")[0],
+                date: formatJstDate(slot.date),
                 startTime: slot.startTime,
                 courseLabel: slot.courseLabel,
                 classBands: [slot.classBand],
@@ -80,7 +81,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
             };
             setClassBandCapacities(initialCapacities);
             form.reset({
-                date: new Date(slot.date).toISOString().split("T")[0],
+                date: formatJstDate(slot.date),
                 startTime: slot.startTime,
                 courseLabel: slot.courseLabel,
                 classBands: [slot.classBand],

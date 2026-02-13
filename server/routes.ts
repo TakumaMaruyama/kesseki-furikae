@@ -57,6 +57,10 @@ function generateConfirmCode(): string {
   return Math.random().toString().slice(2, 8).padStart(6, '0');
 }
 
+function getCanonicalSlotStartDateTime(slot: { date: Date | string | number; startTime: string }): Date {
+  return parseJstDateTime(formatJstDate(slot.date), slot.startTime);
+}
+
 async function getSlotAbsencesAndMakeups(slotId: string) {
   const slot = await storage.getClassSlotById(slotId);
 
@@ -807,15 +811,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const now = new Date();
       res.json({
         success: true,
-        slots: slots.map(slot => ({
-          id: slot.id,
-          date: formatJstDate(slot.date),
-          startTime: slot.startTime,
-          courseLabel: slot.courseLabel,
-          classBand: slot.classBand,
-          lessonStartDateTime: slot.lessonStartDateTime?.toISOString() || null,
-          isPastLesson: slot.lessonStartDateTime ? slot.lessonStartDateTime <= now : false,
-        }))
+        slots: slots.map(slot => {
+          const canonicalSlotStartDateTime = getCanonicalSlotStartDateTime(slot);
+          return {
+            id: slot.id,
+            date: formatJstDate(slot.date),
+            startTime: slot.startTime,
+            courseLabel: slot.courseLabel,
+            classBand: slot.classBand,
+            lessonStartDateTime: canonicalSlotStartDateTime.toISOString(),
+            isPastLesson: canonicalSlotStartDateTime <= now,
+          };
+        })
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -849,7 +856,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Check if lesson time has already passed (fraud prevention)
       const now = new Date();
-      if (originalSlot.lessonStartDateTime && originalSlot.lessonStartDateTime <= now) {
+      const originalSlotStartDateTime = getCanonicalSlotStartDateTime(originalSlot);
+      if (originalSlotStartDateTime <= now) {
         return res.status(400).json({
           error: "レッスン開始時刻を過ぎているため、欠席連絡を登録できません。"
         });
@@ -1037,10 +1045,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allSlots = await storage.getClassSlotsByDateRange(startRange, endRange);
       const now = new Date();
 
-      const slots = allSlots.filter(slot =>
-        slot.classBand === data.declaredClassBand &&
-        slot.lessonStartDateTime >= now
-      );
+      const slots = allSlots.filter(slot => {
+        const canonicalSlotStartDateTime = getCanonicalSlotStartDateTime(slot);
+        return slot.classBand === data.declaredClassBand && canonicalSlotStartDateTime >= now;
+      });
 
       const results = slots.map(slot => {
         const remainingSlots = (slot.capacityLimit - slot.capacityCurrent) - (slot.capacityMakeupUsed || 0);
@@ -1092,6 +1100,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ success: false, message: "クラス帯が一致しません。" });
       }
 
+      const slotStartDateTime = getCanonicalSlotStartDateTime(slot);
+      if (slotStartDateTime <= new Date()) {
+        return res.status(400).json({ success: false, message: "この枠は開始時刻を過ぎているため予約できません。" });
+      }
+
       const remainingSlots = (slot.capacityLimit - slot.capacityCurrent) - (slot.capacityMakeupUsed || 0);
       if (remainingSlots < 1) {
         return res.status(400).json({ success: false, message: "この枠は満席のため予約できません。" });
@@ -1139,7 +1152,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         declineToken: null,
         cancelToken: cancelToken,
         confirmCode: confirmCode,
-        toSlotStartDateTime: slot.lessonStartDateTime,
+        toSlotStartDateTime: slotStartDateTime,
       });
 
       await storage.incrementClassSlotMakeup(data.toSlotId);
@@ -1447,7 +1460,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/slots", requireAdmin, async (req, res) => {
     try {
-      const slots = await db.select().from(classSlots).orderBy(asc(classSlots.lessonStartDateTime));
+      const slots = await db.select().from(classSlots).orderBy(asc(classSlots.date), asc(classSlots.startTime));
       res.json(slots);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
