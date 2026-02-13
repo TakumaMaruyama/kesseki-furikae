@@ -320,6 +320,21 @@ export default function ParentPage() {
       </header>
 
       <main className="container max-w-2xl px-4 py-8 md:py-12 space-y-8">
+        <section className="rounded-lg border bg-muted/30 px-4 py-3">
+          <p className="text-sm text-muted-foreground">
+            不具合を見つけた場合は、こちらのフォームからご報告ください。
+          </p>
+          <a
+            href="https://docs.google.com/forms/d/e/1FAIpQLSd4XbZOevZtBujfElYwwQ2RzFJsA0Jp2vlE05BYO-POLpBafw/viewform?usp=header"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm font-semibold text-primary underline underline-offset-4"
+            data-testid="link-bug-report-form"
+          >
+            バグ報告フォームを開く
+          </a>
+        </section>
+
         {!absenceData && !token && (
           <Collapsible>
             <Card className="border-2 border-primary/20 bg-primary/5">
