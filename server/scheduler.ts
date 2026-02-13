@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { db } from "./db";
 import { classSlots } from "@shared/schema";
 import { and, gte, lte } from "drizzle-orm";
-import { JST_TIME_ZONE } from "@shared/jst";
+import { addJstDays, endOfJstDay, formatJstDate, JST_TIME_ZONE, parseJstDateTime, startOfJstDay } from "@shared/jst";
 
 export function startScheduler() {
   // 定期的な欠席期限チェックのみ実行（順番待ち機能は削除済み）
@@ -22,14 +22,24 @@ export function startScheduler() {
     console.log("[Scheduler] 定期チェック開始");
 
     // 今後のレッスン枠のチェック
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const scanStart = addJstDays(startOfJstDay(now), -1);
+    const scanEnd = endOfJstDay(addJstDays(now, 1));
 
-    const upcomingSlots = await db.select().from(classSlots)
+    const candidateSlots = await db.select({
+      id: classSlots.id,
+      date: classSlots.date,
+      startTime: classSlots.startTime,
+    }).from(classSlots)
       .where(and(
-        gte(classSlots.lessonStartDateTime, now),
-        lte(classSlots.lessonStartDateTime, tomorrow)
+        gte(classSlots.date, scanStart),
+        lte(classSlots.date, scanEnd)
       ));
+
+    const upcomingSlots = candidateSlots.filter((slot) => {
+      const canonicalSlotStartDateTime = parseJstDateTime(formatJstDate(slot.date), slot.startTime);
+      return canonicalSlotStartDateTime >= now && canonicalSlotStartDateTime <= tomorrow;
+    });
 
     console.log(`[Scheduler] 今後24時間以内のレッスン枠: ${upcomingSlots.length}件`);
     console.log("[Scheduler] 定期チェック完了");

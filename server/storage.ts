@@ -24,7 +24,7 @@ import {
   type InsertHoliday,
   type GlobalSettings,
 } from "@shared/schema";
-import { addJstDays, endOfJstDay, startOfJstDay } from "@shared/jst";
+import { addJstDays, endOfJstDay, formatJstDate, parseJstDateTime, startOfJstDay } from "@shared/jst";
 import { db } from "./db";
 import { eq, and, gte, lte, lt, asc, desc, sql } from "drizzle-orm";
 
@@ -314,10 +314,18 @@ export class DatabaseStorage implements IStorage {
 
   async countFutureSlots(): Promise<number> {
     const now = new Date();
-    const result = await db.select({ count: sql<number>`count(*)` })
+    const scanStart = addJstDays(startOfJstDay(now), -1);
+    const slots = await db.select({
+      date: classSlots.date,
+      startTime: classSlots.startTime,
+    })
       .from(classSlots)
-      .where(gte(classSlots.lessonStartDateTime, now));
-    return Number(result[0]?.count || 0);
+      .where(gte(classSlots.date, scanStart));
+
+    return slots.filter(slot => {
+      const canonicalSlotStartDateTime = parseJstDateTime(formatJstDate(slot.date), slot.startTime);
+      return canonicalSlotStartDateTime >= now;
+    }).length;
   }
 
   async incrementClassSlotMakeup(id: string): Promise<ClassSlot | undefined> {

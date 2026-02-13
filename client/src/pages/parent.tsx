@@ -204,6 +204,7 @@ export default function ParentPage() {
       contactEmail: contactEmail || null,
       makeupDeadline: result.makeupDeadline,
       makeupStatus: "PENDING",
+      resumeToken: result.resumeToken,
       confirmCode: result.confirmCode,
     });
 
@@ -255,15 +256,35 @@ export default function ParentPage() {
     onError: (error: any) => {
       toast({
         title: "キャンセルエラー",
-        description: error.message || "キャンセルに失敗しました。",
+        description: error?.message || error?.error || "キャンセルに失敗しました。ページを再読み込みして再度お試しください。",
         variant: "destructive",
       });
     },
   });
 
   const handleCancelAbsence = () => {
+    if (cancelAbsenceMutation.isPending) return;
+
+    if (!absenceData) {
+      toast({
+        title: "キャンセルできません",
+        description: "欠席情報が見つかりません。ページを再読み込みしてください。",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const resumeToken = absenceData?.resumeToken || token;
-    if (absenceData && resumeToken && confirm("欠席連絡をキャンセルしますか？関連する予約もすべてキャンセルされます。")) {
+    if (!resumeToken) {
+      toast({
+        title: "キャンセルできません",
+        description: "識別トークンが見つかりません。トップページを開き直してから再試行してください。",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (confirm("欠席連絡をキャンセルしますか？関連する予約もすべてキャンセルされます。")) {
       cancelAbsenceMutation.mutate(resumeToken);
     }
   };
@@ -402,10 +423,11 @@ export default function ParentPage() {
                     onClick={handleCancelAbsence}
                     variant="outline"
                     className="w-full"
+                    disabled={cancelAbsenceMutation.isPending}
                     data-testid="button-cancel-absence"
                   >
                     <XCircleIcon className="w-4 h-4 mr-2" />
-                    欠席連絡をキャンセル
+                    {cancelAbsenceMutation.isPending ? "キャンセル中..." : "欠席連絡をキャンセル"}
                   </Button>
                 )}
               </CardContent>
