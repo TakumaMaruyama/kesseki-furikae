@@ -11,8 +11,9 @@ type SlotIdInfo = {
 
 export type SlotTimeDriftAnalysis = {
   slot: ClassSlot;
-  fromColumns: Date;
-  fromId: Date | null;
+  canonicalFromColumns: Date;
+  storedLessonStartDateTime: Date | null;
+  lessonStartMatchesCanonical: boolean;
   columnDateISO: string;
   slotTimeHHMM: string;
   idDateISO: string | null;
@@ -20,9 +21,8 @@ export type SlotTimeDriftAnalysis = {
   idParsable: boolean;
   timeMatchesId: boolean;
   dayDiffFromId: number | null;
-  isEditedAfterCreation: boolean;
-  hasOneDayDateDrift: boolean;
-  autoRepairEligible: boolean;
+  hasOneDayIdDateDrift: boolean;
+  fromId: Date | null;
 };
 
 function parseSlotId(slotId: string): SlotIdInfo | null {
@@ -48,7 +48,10 @@ function toDateOrNull(value: Date | string | null | undefined): Date | null {
 export function analyzeSlotTimeDrift(slot: ClassSlot): SlotTimeDriftAnalysis {
   const columnDateISO = formatJstDate(slot.date);
   const slotTimeHHMM = normalizeToHHMM(slot.startTime);
-  const fromColumns = parseJstDateTime(columnDateISO, slot.startTime);
+  const canonicalFromColumns = parseJstDateTime(columnDateISO, slot.startTime);
+  const storedLessonStartDateTime = toDateOrNull(slot.lessonStartDateTime);
+  const lessonStartMatchesCanonical =
+    !!storedLessonStartDateTime && storedLessonStartDateTime.getTime() === canonicalFromColumns.getTime();
 
   const idInfo = parseSlotId(slot.id);
   const idParsable = !!idInfo;
@@ -65,16 +68,13 @@ export function analyzeSlotTimeDrift(slot: ClassSlot): SlotTimeDriftAnalysis {
     fromId = parseJstDateTime(idInfo.dateISO, slot.startTime);
   }
 
-  const createdAt = toDateOrNull(slot.createdAt);
-  const updatedAt = toDateOrNull(slot.updatedAt);
-  const isEditedAfterCreation = !!createdAt && !!updatedAt && updatedAt.getTime() > createdAt.getTime();
-  const hasOneDayDateDrift = dayDiffFromId !== null && Math.abs(dayDiffFromId) === 1;
-  const autoRepairEligible = idParsable && timeMatchesId && hasOneDayDateDrift && isEditedAfterCreation;
+  const hasOneDayIdDateDrift = dayDiffFromId !== null && Math.abs(dayDiffFromId) === 1;
 
   return {
     slot,
-    fromColumns,
-    fromId,
+    canonicalFromColumns,
+    storedLessonStartDateTime,
+    lessonStartMatchesCanonical,
     columnDateISO,
     slotTimeHHMM,
     idDateISO,
@@ -82,8 +82,7 @@ export function analyzeSlotTimeDrift(slot: ClassSlot): SlotTimeDriftAnalysis {
     idParsable,
     timeMatchesId,
     dayDiffFromId,
-    isEditedAfterCreation,
-    hasOneDayDateDrift,
-    autoRepairEligible,
+    hasOneDayIdDateDrift,
+    fromId,
   };
 }

@@ -21,7 +21,17 @@ app.use(express.urlencoded({ extended: false }));
 
 // Health check endpoint for deployment
 app.get("/health", (_req, res) => {
-  res.status(200).json({ status: "ok" });
+  const buildSha =
+    process.env.REPLIT_DEPLOYMENT_COMMIT ??
+    process.env.REPLIT_GIT_COMMIT_SHA ??
+    process.env.GIT_COMMIT ??
+    process.env.COMMIT_SHA ??
+    null;
+
+  res.status(200).json({
+    status: "ok",
+    buildSha,
+  });
 });
 
 app.use((req, res, next) => {

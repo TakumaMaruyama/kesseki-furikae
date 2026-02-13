@@ -1,7 +1,6 @@
 import { asc, eq } from "drizzle-orm";
 import { db } from "../server/db.ts";
 import { classSlots, requests } from "../shared/schema.ts";
-import { parseJstDate, parseJstDateTime } from "../shared/jst.ts";
 import { analyzeSlotTimeDrift } from "./slot-time-drift-utils.ts";
 
 async function main() {
@@ -13,26 +12,72 @@ async function main() {
     .orderBy(asc(classSlots.date), asc(classSlots.startTime));
 
   const analyses = slots.map(analyzeSlotTimeDrift);
-  const candidates = analyses.filter((a) => a.autoRepairEligible);
+  const slotFixTargets = analyses.filter((a) => !a.lessonStartMatchesCanonical);
+  const analysisBySlotId = new Map(analyses.map((a) => [a.slot.id, a]));
+
+  const requestRows = await db
+    .select({
+      id: requests.id,
+      toSlotId: requests.toSlotId,
+      toSlotStartDateTime: requests.toSlotStartDateTime,
+    })
+    .from(requests);
+
+  const requestFixTargets = requestRows
+    .map((request) => {
+      const slotAnalysis = analysisBySlotId.get(request.toSlotId);
+      if (!slotAnalysis) return null;
+
+      const stored = new Date(request.toSlotStartDateTime);
+      const matchesCanonical = !Number.isNaN(stored.getTime()) &&
+        stored.getTime() === slotAnalysis.canonicalFromColumns.getTime();
+      if (matchesCanonical) return null;
+
+      return {
+        requestId: request.id,
+        slotId: request.toSlotId,
+        correctedToSlotStartDateTime: slotAnalysis.canonicalFromColumns,
+        storedToSlotStartDateTime: request.toSlotStartDateTime,
+      };
+    })
+    .filter((target): target is NonNullable<typeof target> => target !== null);
+
+  const idDateDriftCount = analyses.filter((a) => a.idParsable && a.timeMatchesId && a.hasOneDayIdDateDrift).length;
 
   console.log(`[slots:repair-time] Mode: ${shouldApply ? "apply" : "dry-run"}`);
-  console.log(`[slots:repair-time] Auto-repair eligible slots: ${candidates.length}`);
+  console.log(`[slots:repair-time] Slot lesson_start_date_time targets: ${slotFixTargets.length}`);
+  console.log(`[slots:repair-time] Request to_slot_start_date_time targets: ${requestFixTargets.length}`);
+  console.log(`[slots:repair-time] id_date_drift_count (reference): ${idDateDriftCount}`);
 
-  if (candidates.length === 0) {
+  if (slotFixTargets.length > 0) {
+    console.log("[slots:repair-time] Slot fix targets (up to 50 rows)");
+    console.table(
+      slotFixTargets.slice(0, 50).map((target) => ({
+        slotId: target.slot.id,
+        startTime: target.slot.startTime,
+        columnDateISO: target.columnDateISO,
+        storedLessonStartDateTime: target.storedLessonStartDateTime?.toISOString() || null,
+        canonicalFromColumns: target.canonicalFromColumns.toISOString(),
+      })),
+    );
+  }
+
+  if (requestFixTargets.length > 0) {
+    console.log("[slots:repair-time] Request fix targets (up to 50 rows)");
+    console.table(
+      requestFixTargets.slice(0, 50).map((target) => ({
+        requestId: target.requestId,
+        slotId: target.slotId,
+        storedToSlotStartDateTime: target.storedToSlotStartDateTime,
+        canonicalToSlotStartDateTime: target.correctedToSlotStartDateTime.toISOString(),
+      })),
+    );
+  }
+
+  if (slotFixTargets.length === 0 && requestFixTargets.length === 0) {
     console.log("[slots:repair-time] No repair targets found.");
     return;
   }
-
-  console.table(
-    candidates.slice(0, 50).map((a) => ({
-      slotId: a.slot.id,
-      classBand: a.slot.classBand,
-      startTime: a.slot.startTime,
-      fromDate: a.columnDateISO,
-      toDate: a.idDateISO,
-      dayDiffFromId: a.dayDiffFromId,
-    })),
-  );
 
   if (!shouldApply) {
     console.log("[slots:repair-time] Dry run only. Re-run with --apply to persist changes.");
@@ -43,30 +88,26 @@ async function main() {
   let updatedRequestCount = 0;
 
   await db.transaction(async (tx) => {
-    for (const candidate of candidates) {
-      if (!candidate.idDateISO) continue;
-
-      const correctedDate = parseJstDate(candidate.idDateISO);
-      const correctedStartDateTime = parseJstDateTime(candidate.idDateISO, candidate.slot.startTime);
-
+    for (const target of slotFixTargets) {
       await tx
         .update(classSlots)
         .set({
-          date: correctedDate,
-          lessonStartDateTime: correctedStartDateTime,
+          lessonStartDateTime: target.canonicalFromColumns,
         })
-        .where(eq(classSlots.id, candidate.slot.id));
-
-      const updatedRequests = await tx
-        .update(requests)
-        .set({
-          toSlotStartDateTime: correctedStartDateTime,
-        })
-        .where(eq(requests.toSlotId, candidate.slot.id))
-        .returning({ id: requests.id });
+        .where(eq(classSlots.id, target.slot.id));
 
       updatedSlotCount += 1;
-      updatedRequestCount += updatedRequests.length;
+    }
+
+    for (const target of requestFixTargets) {
+      await tx
+        .update(requests)
+        .set({
+          toSlotStartDateTime: target.correctedToSlotStartDateTime,
+        })
+        .where(eq(requests.id, target.requestId));
+
+      updatedRequestCount += 1;
     }
   });
 

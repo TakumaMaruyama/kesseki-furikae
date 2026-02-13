@@ -1,6 +1,6 @@
 import { asc } from "drizzle-orm";
 import { db } from "../server/db.ts";
-import { classSlots } from "../shared/schema.ts";
+import { classSlots, requests } from "../shared/schema.ts";
 import { analyzeSlotTimeDrift } from "./slot-time-drift-utils.ts";
 
 async function main() {
@@ -10,52 +10,81 @@ async function main() {
     .orderBy(asc(classSlots.date), asc(classSlots.startTime));
 
   const analyses = slots.map(analyzeSlotTimeDrift);
+  const analysisBySlotId = new Map(analyses.map((a) => [a.slot.id, a]));
+
+  const requestRows = await db
+    .select({
+      id: requests.id,
+      toSlotId: requests.toSlotId,
+      toSlotStartDateTime: requests.toSlotStartDateTime,
+    })
+    .from(requests);
+
+  const requestMismatches = requestRows
+    .map((request) => {
+      const slotAnalysis = analysisBySlotId.get(request.toSlotId);
+      if (!slotAnalysis) {
+        return null;
+      }
+
+      const stored = new Date(request.toSlotStartDateTime);
+      const matchesCanonical = !Number.isNaN(stored.getTime()) &&
+        stored.getTime() === slotAnalysis.canonicalFromColumns.getTime();
+      if (matchesCanonical) {
+        return null;
+      }
+
+      return {
+        requestId: request.id,
+        slotId: request.toSlotId,
+        storedToSlotStartDateTime: request.toSlotStartDateTime,
+        canonicalToSlotStartDateTime: slotAnalysis.canonicalFromColumns.toISOString(),
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null);
 
   const summary = {
     scannedTotal: analyses.length,
-    idParsable: analyses.filter((a) => a.idParsable).length,
-    idTimeMatchesStartTime: analyses.filter((a) => a.idParsable && a.timeMatchesId).length,
-    hasOneDayDateDrift: analyses.filter((a) => a.idParsable && a.timeMatchesId && a.hasOneDayDateDrift).length,
-    editedAfterCreation: analyses.filter((a) => a.idParsable && a.timeMatchesId && a.isEditedAfterCreation).length,
-    autoRepairEligible: analyses.filter((a) => a.autoRepairEligible).length,
-    needsManualReview: analyses.filter(
-      (a) => a.idParsable && a.timeMatchesId && a.hasOneDayDateDrift && !a.isEditedAfterCreation,
-    ).length,
+    mismatch_lesson_start_count: analyses.filter((a) => !a.lessonStartMatchesCanonical).length,
+    mismatch_request_start_count: requestMismatches.length,
+    id_date_drift_count: analyses.filter((a) => a.idParsable && a.timeMatchesId && a.hasOneDayIdDateDrift).length,
   };
 
   console.log("[slots:audit-time] Summary");
   console.table(summary);
 
-  const autoRepairCandidates = analyses.filter((a) => a.autoRepairEligible);
-  if (autoRepairCandidates.length > 0) {
-    console.log("[slots:audit-time] Auto-repair candidates (up to 50 rows)");
+  const slotMismatches = analyses.filter((a) => !a.lessonStartMatchesCanonical);
+  if (slotMismatches.length > 0) {
+    console.log("[slots:audit-time] Slot lesson_start_date_time mismatches (up to 50 rows)");
     console.table(
-      autoRepairCandidates.slice(0, 50).map((a) => ({
+      slotMismatches.slice(0, 50).map((a) => ({
         slotId: a.slot.id,
         classBand: a.slot.classBand,
         startTime: a.slot.startTime,
-        columnDate: a.columnDateISO,
-        idDate: a.idDateISO,
-        dayDiffFromId: a.dayDiffFromId,
+        columnDateISO: a.columnDateISO,
+        storedLessonStartDateTime: a.storedLessonStartDateTime?.toISOString() || null,
+        canonicalFromColumns: a.canonicalFromColumns.toISOString(),
       })),
     );
   }
 
-  const manualReviewCandidates = analyses.filter(
-    (a) => a.idParsable && a.timeMatchesId && a.hasOneDayDateDrift && !a.isEditedAfterCreation,
-  );
-  if (manualReviewCandidates.length > 0) {
-    console.log("[slots:audit-time] Manual review candidates (up to 50 rows)");
+  if (requestMismatches.length > 0) {
+    console.log("[slots:audit-time] Request to_slot_start_date_time mismatches (up to 50 rows)");
     console.table(
-      manualReviewCandidates.slice(0, 50).map((a) => ({
+      requestMismatches.slice(0, 50),
+    );
+  }
+
+  const idDateDrifts = analyses.filter((a) => a.idParsable && a.timeMatchesId && a.hasOneDayIdDateDrift);
+  if (idDateDrifts.length > 0) {
+    console.log("[slots:audit-time] ID vs date drift rows (reference, up to 50 rows)");
+    console.table(
+      idDateDrifts.slice(0, 50).map((a) => ({
         slotId: a.slot.id,
-        classBand: a.slot.classBand,
-        startTime: a.slot.startTime,
-        columnDate: a.columnDateISO,
-        idDate: a.idDateISO,
+        columnDateISO: a.columnDateISO,
+        idDateISO: a.idDateISO,
         dayDiffFromId: a.dayDiffFromId,
-        createdAt: a.slot.createdAt,
-        updatedAt: a.slot.updatedAt,
+        startTime: a.slot.startTime,
       })),
     );
   }
