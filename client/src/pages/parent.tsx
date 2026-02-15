@@ -68,6 +68,25 @@ export default function ParentPage() {
   const [slotsLoaded, setSlotsLoaded] = useState(false);
   const classSlotsFetchSeqRef = useRef(0);
 
+  const setOriginalSlotIdValue = (
+    slotId: string,
+    options?: { shouldDirty?: boolean; shouldTouch?: boolean }
+  ) => {
+    absenceForm.setValue("originalSlotId", slotId, {
+      shouldValidate: true,
+      shouldDirty: options?.shouldDirty ?? false,
+      shouldTouch: options?.shouldTouch ?? false,
+    });
+
+    if (slotId) {
+      absenceForm.clearErrors("originalSlotId");
+    }
+
+    // Programmatic updates can leave stale resolver errors in rare timing cases.
+    // Force the field-level validation state to settle immediately.
+    void absenceForm.trigger("originalSlotId");
+  };
+
   const isMakeupDeadlineOpen = (deadlineISO: string) => {
     const deadlineEndExclusive = addJstDays(parseJstDate(deadlineISO), 1);
     return deadlineEndExclusive > new Date();
@@ -123,15 +142,15 @@ export default function ParentPage() {
             const currentSlotId = absenceForm.getValues("originalSlotId");
             const currentSelectionIsStillValid = !!currentSlotId && validSlots.some((s: any) => s.id === currentSlotId);
             if (currentSelectionIsStillValid) {
-              absenceForm.setValue("originalSlotId", currentSlotId, { shouldValidate: true });
+              setOriginalSlotIdValue(currentSlotId);
               return;
             }
 
             // 1つしかない場合は自動選択
             if (validSlots.length === 1) {
-              absenceForm.setValue("originalSlotId", validSlots[0].id, { shouldValidate: true });
+              setOriginalSlotIdValue(validSlots[0].id);
             } else {
-              absenceForm.setValue("originalSlotId", "", { shouldValidate: true });
+              setOriginalSlotIdValue("");
             }
           })
           .catch(() => {
@@ -139,7 +158,7 @@ export default function ParentPage() {
 
             setAvailableSlotsForAbsence([]);
             setSlotsLoaded(true);
-            absenceForm.setValue("originalSlotId", "", { shouldValidate: true });
+            setOriginalSlotIdValue("");
           });
       }
     });
@@ -523,12 +542,10 @@ export default function ParentPage() {
                           <FormLabel>欠席するレッスン枠</FormLabel>
                           <Select
                             onValueChange={(selectedSlotId) => {
-                              absenceForm.setValue("originalSlotId", selectedSlotId, {
-                                shouldValidate: true,
+                              setOriginalSlotIdValue(selectedSlotId, {
                                 shouldDirty: true,
                                 shouldTouch: true,
                               });
-                              absenceForm.clearErrors("originalSlotId");
                             }}
                             value={field.value || undefined}
                             disabled={availableSlotsForAbsence.length === 0}
