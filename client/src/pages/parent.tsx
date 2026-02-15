@@ -70,10 +70,11 @@ export default function ParentPage() {
 
   const setOriginalSlotIdValue = (
     slotId: string,
-    options?: { shouldDirty?: boolean; shouldTouch?: boolean }
+    options?: { shouldDirty?: boolean; shouldTouch?: boolean; shouldValidate?: boolean }
   ) => {
+    const shouldValidate = options?.shouldValidate ?? false;
     absenceForm.setValue("originalSlotId", slotId, {
-      shouldValidate: true,
+      shouldValidate,
       shouldDirty: options?.shouldDirty ?? false,
       shouldTouch: options?.shouldTouch ?? false,
     });
@@ -82,9 +83,9 @@ export default function ParentPage() {
       absenceForm.clearErrors("originalSlotId");
     }
 
-    // Programmatic updates can leave stale resolver errors in rare timing cases.
-    // Force the field-level validation state to settle immediately.
-    void absenceForm.trigger("originalSlotId");
+    if (shouldValidate) {
+      void absenceForm.trigger("originalSlotId");
+    }
   };
 
   const isMakeupDeadlineOpen = (deadlineISO: string) => {
@@ -545,6 +546,7 @@ export default function ParentPage() {
                               setOriginalSlotIdValue(selectedSlotId, {
                                 shouldDirty: true,
                                 shouldTouch: true,
+                                shouldValidate: true,
                               });
                             }}
                             value={field.value || undefined}
