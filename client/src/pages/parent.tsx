@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
@@ -66,6 +66,7 @@ export default function ParentPage() {
   const [confirmCode, setConfirmCode] = useState<string | null>(null);
   const [availableSlotsForAbsence, setAvailableSlotsForAbsence] = useState<any[]>([]);
   const [slotsLoaded, setSlotsLoaded] = useState(false);
+  const classSlotsFetchSeqRef = useRef(0);
 
   const isMakeupDeadlineOpen = (deadlineISO: string) => {
     const deadlineEndExclusive = addJstDays(parseJstDate(deadlineISO), 1);
@@ -108,24 +109,37 @@ export default function ParentPage() {
     const subscription = absenceForm.watch((value, { name }) => {
       if ((name === "absentDateISO" || name === "declaredClassBand") &&
         value.absentDateISO && value.declaredClassBand) {
+        const fetchSeq = ++classSlotsFetchSeqRef.current;
         setSlotsLoaded(false);
         apiRequest("GET", `/api/class-slots?date=${value.absentDateISO}&classBand=${value.declaredClassBand}`)
           .then((response: any) => {
+            if (fetchSeq !== classSlotsFetchSeqRef.current) return;
+
             const slots = response.slots || [];
             const validSlots = slots.filter((s: any) => !s.isPastLesson);
             setAvailableSlotsForAbsence(slots);
             setSlotsLoaded(true);
+
+            const currentSlotId = absenceForm.getValues("originalSlotId");
+            const currentSelectionIsStillValid = !!currentSlotId && validSlots.some((s: any) => s.id === currentSlotId);
+            if (currentSelectionIsStillValid) {
+              absenceForm.setValue("originalSlotId", currentSlotId, { shouldValidate: true });
+              return;
+            }
+
             // 1つしかない場合は自動選択
             if (validSlots.length === 1) {
-              absenceForm.setValue("originalSlotId", validSlots[0].id);
+              absenceForm.setValue("originalSlotId", validSlots[0].id, { shouldValidate: true });
             } else {
-              absenceForm.setValue("originalSlotId", "");
+              absenceForm.setValue("originalSlotId", "", { shouldValidate: true });
             }
           })
           .catch(() => {
+            if (fetchSeq !== classSlotsFetchSeqRef.current) return;
+
             setAvailableSlotsForAbsence([]);
             setSlotsLoaded(true);
-            absenceForm.setValue("originalSlotId", "");
+            absenceForm.setValue("originalSlotId", "", { shouldValidate: true });
           });
       }
     });
@@ -508,8 +522,15 @@ export default function ParentPage() {
                         <FormItem>
                           <FormLabel>欠席するレッスン枠</FormLabel>
                           <Select
-                            onValueChange={field.onChange}
-                            value={field.value}
+                            onValueChange={(selectedSlotId) => {
+                              absenceForm.setValue("originalSlotId", selectedSlotId, {
+                                shouldValidate: true,
+                                shouldDirty: true,
+                                shouldTouch: true,
+                              });
+                              absenceForm.clearErrors("originalSlotId");
+                            }}
+                            value={field.value || undefined}
                             disabled={availableSlotsForAbsence.length === 0}
                           >
                             <FormControl>
