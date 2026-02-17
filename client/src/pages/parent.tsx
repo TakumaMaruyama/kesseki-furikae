@@ -21,10 +21,8 @@ import { Link } from "wouter";
 import { Calendar } from "@/components/ui/calendar";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { addJstDays, formatJstDate, parseJstDate } from "@shared/jst";
 import { getActualCurrent, getRemainingCapacity } from "@shared/capacity";
-import { cn } from "@/lib/utils";
 
 type AbsenceData = {
   id: string;
@@ -515,49 +513,23 @@ export default function ParentPage() {
                     <FormField
                       control={absenceForm.control}
                       name="absentDateISO"
-                      render={({ field }) => {
-                        const selectedAbsenceDate = field.value
-                          ? parseJstDate(field.value)
-                          : undefined;
-
-                        return (
+                      render={({ field }) => (
                         <FormItem className="w-full min-w-0">
                           <FormLabel>欠席予定日</FormLabel>
-                          <Popover>
-                            <PopoverTrigger asChild>
-                              <FormControl>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  data-testid="input-absent-date"
-                                  className={cn(
-                                    "h-12 w-full min-w-0 justify-start overflow-hidden text-left text-sm font-normal",
-                                    !field.value && "text-muted-foreground",
-                                  )}
-                                >
-                                  <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
-                                  <span className="truncate">
-                                    {selectedAbsenceDate
-                                      ? format(selectedAbsenceDate, "yyyy年M月d日(E)", { locale: ja })
-                                      : "日付を選択してください"}
-                                  </span>
-                                </Button>
-                              </FormControl>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-auto p-0" align="start">
-                              <Calendar
-                                mode="single"
-                                selected={selectedAbsenceDate}
-                                onSelect={(date) => {
-                                  field.onChange(date ? formatJstDate(date) : "");
-                                }}
-                                initialFocus
+                          <FormControl>
+                            <div className="relative w-full min-w-0 overflow-hidden rounded-md">
+                              <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground pointer-events-none" />
+                              <Input
+                                type="date"
+                                {...field}
+                                className="absence-date-input h-12 w-full min-w-0 max-w-full pl-10 pr-2 text-sm"
+                                data-testid="input-absent-date"
                               />
-                            </PopoverContent>
-                          </Popover>
+                            </div>
+                          </FormControl>
                           <FormMessage />
                         </FormItem>
-                      )}}
+                      )}
                     />
 
                     <FormField
