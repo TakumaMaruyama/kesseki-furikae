@@ -70,9 +70,12 @@ function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, { variant: "default" | "secondary" | "destructive" | "outline", label: string }> = {
     "PENDING": { variant: "secondary", label: "振替待ち" },
     "MAKEUP_CONFIRMED": { variant: "default", label: "振替確定" },
-    "EXPIRED": { variant: "destructive", label: "期限切れ" },
+    "EXPIRED": { variant: "destructive", label: "キャンセル済み" },
+    "CANCELLED": { variant: "destructive", label: "キャンセル済み" },
     "確定": { variant: "default", label: "確定" },
-    "却下": { variant: "destructive", label: "キャンセル済" },
+    "却下": { variant: "destructive", label: "キャンセル済み" },
+    "キャンセル": { variant: "destructive", label: "キャンセル済み" },
+    "辞退": { variant: "destructive", label: "キャンセル済み" },
     "期限切れ": { variant: "destructive", label: "期限切れ" },
   };
 
@@ -257,7 +260,7 @@ function AbsenceHistorySection({
 
   // 欠席がキャンセル可能かどうか
   const canCancelAbsence = (absence: Absence) => {
-    if (absence.makeupStatus === "EXPIRED") return false;
+    if (absence.makeupStatus === "EXPIRED" || absence.makeupStatus === "CANCELLED") return false;
     const now = new Date();
     const absentDate = new Date(absence.absentDate);
     return absentDate >= now;

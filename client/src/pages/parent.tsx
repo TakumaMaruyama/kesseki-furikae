@@ -22,6 +22,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { addJstDays, formatJstDate, parseJstDate } from "@shared/jst";
+import { getActualCurrent, getRemainingCapacity } from "@shared/capacity";
 
 type AbsenceData = {
   id: string;
@@ -67,6 +68,7 @@ export default function ParentPage() {
   const [availableSlotsForAbsence, setAvailableSlotsForAbsence] = useState<any[]>([]);
   const [slotsLoaded, setSlotsLoaded] = useState(false);
   const classSlotsFetchSeqRef = useRef(0);
+  const isAbsenceCancelled = (status: string) => status === "CANCELLED" || status === "EXPIRED";
 
   const setOriginalSlotIdValue = (
     slotId: string,
@@ -396,21 +398,18 @@ export default function ParentPage() {
                       <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold">1</div>
                       <div>
                         <p className="font-semibold">欠席連絡を登録</p>
-                        <p className="text-sm text-muted-foreground">お子様の名前、クラス帯、欠席日を入力して登録します</p>
                       </div>
                     </div>
                     <div className="flex gap-3">
                       <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold">2</div>
                       <div>
                         <p className="font-semibold">確認コードを保存</p>
-                        <p className="text-sm text-muted-foreground">表示される6桁の確認コードをメモしてください（メールでも届きます）</p>
                       </div>
                     </div>
                     <div className="flex gap-3">
                       <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold">3</div>
                       <div>
                         <p className="font-semibold">振替枠を検索・予約</p>
-                        <p className="text-sm text-muted-foreground">振替可能な枠を検索し、予約できます</p>
                       </div>
                     </div>
                   </div>
@@ -421,8 +420,6 @@ export default function ParentPage() {
                       <li><strong>確認コードは必ず保存してください</strong> - 予約確認・キャンセルに必要です</li>
                       <li>確認コードが分からなくなった場合は<strong>PICROでメッセージ</strong>をお送りください</li>
                       <li>欠席連絡は<strong>レッスン開始時間まで</strong>、振替登録は<strong>開始30分前まで</strong>に行ってください</li>
-                      <li>メールアドレスを入力すると、振替確定時にも通知が届きます</li>
-                      <li>満席の枠は予約できません</li>
                     </ul>
                   </div>
                 </CardContent>
@@ -452,7 +449,7 @@ export default function ParentPage() {
                     </div>
                   </div>
                 </div>
-                {isMakeupDeadlineOpen(absenceData.makeupDeadline) && (
+                {isMakeupDeadlineOpen(absenceData.makeupDeadline) && !isAbsenceCancelled(absenceData.makeupStatus) && (
                   <Button
                     onClick={handleCancelAbsence}
                     variant="outline"
@@ -630,6 +627,12 @@ export default function ParentPage() {
                   すでに振替予約が確定済みです。別の枠への変更は事務局へお問い合わせください。
                 </CardContent>
               </Card>
+            ) : isAbsenceCancelled(absenceData.makeupStatus) ? (
+              <Card className="border-2 bg-muted/40">
+                <CardContent className="p-12 text-center text-muted-foreground">
+                  この欠席連絡はキャンセル済みです。新しい欠席連絡を登録してください。
+                </CardContent>
+              </Card>
             ) : !isMakeupDeadlineOpen(absenceData.makeupDeadline) ? (
               <Card className="border-2 bg-muted/40">
                 <CardContent className="p-12 text-center text-muted-foreground">
@@ -668,7 +671,7 @@ export default function ParentPage() {
           )}
         </section>
 
-        {searchParams2 && absenceData && isMakeupDeadlineOpen(absenceData.makeupDeadline) && (
+        {searchParams2 && absenceData && absenceData.makeupStatus === "PENDING" && isMakeupDeadlineOpen(absenceData.makeupDeadline) && (
           <section>
             <h2 className="text-2xl font-semibold mb-6">検索結果</h2>
 
@@ -867,8 +870,16 @@ type SlotCardProps = {
 };
 
 function SlotCard({ slot, onBook, absenceId }: SlotCardProps) {
-  const capacityMakeupAllowed = (slot.capacityLimit || 0) - (slot.capacityCurrent || 0);
-  const actualRemainingSlots = Math.max(0, capacityMakeupAllowed - (slot.capacityMakeupUsed || 0));
+  const actualCurrent = slot.actualCurrent ?? getActualCurrent({
+    capacityLimit: slot.capacityLimit,
+    capacityCurrent: slot.capacityCurrent,
+    capacityMakeupUsed: slot.capacityMakeupUsed,
+  });
+  const actualRemainingSlots = slot.remainingSlots ?? getRemainingCapacity({
+    capacityLimit: slot.capacityLimit,
+    capacityCurrent: slot.capacityCurrent,
+    capacityMakeupUsed: slot.capacityMakeupUsed,
+  });
 
   return (
     <Card
@@ -916,7 +927,7 @@ function SlotCard({ slot, onBook, absenceId }: SlotCardProps) {
           </div>
           <div className="text-center p-2 bg-background rounded border">
             <p className="text-muted-foreground text-xs">現在</p>
-            <p className="font-semibold">{slot.capacityCurrent || 0}</p>
+            <p className="font-semibold">{actualCurrent}</p>
           </div>
           <div className="text-center p-2 bg-background rounded border">
             <p className="text-muted-foreground text-xs">振替枠</p>

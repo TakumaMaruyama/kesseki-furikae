@@ -214,7 +214,7 @@ export const absenceSchema = z.object({
   contactEmail: z.string().email().nullable(),
   resumeToken: z.string(),
   makeupDeadline: z.date(),
-  makeupStatus: z.enum(["PENDING", "MAKEUP_CONFIRMED", "EXPIRED"]),
+  makeupStatus: z.enum(["PENDING", "MAKEUP_CONFIRMED", "EXPIRED", "CANCELLED"]),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -253,7 +253,7 @@ export const requestSchema = z.object({
   declaredClassBand: z.enum(["初級", "中級", "上級"]),
   absentDate: z.date(),
   toSlotId: z.string(),
-  status: z.enum(["確定", "却下", "期限切れ"]),
+  status: z.enum(["確定", "却下", "期限切れ", "キャンセル", "辞退"]),
   contactEmail: z.string().email().nullable(),
   confirmToken: z.string().nullable(),
   declineToken: z.string().nullable(),
@@ -397,4 +397,5 @@ export type SlotSearchResult = {
   capacityLimit?: number;
   capacityCurrent?: number;
   capacityMakeupUsed?: number;
+  actualCurrent?: number;
 };

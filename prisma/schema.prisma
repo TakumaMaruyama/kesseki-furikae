@@ -38,7 +38,7 @@ model Absence {
   contactEmail      String?
   resumeToken       String   @unique
   makeupDeadline    DateTime
-  makeupStatus      String   @default("PENDING") // PENDING, MAKEUP_CONFIRMED, EXPIRED
+  makeupStatus      String   @default("PENDING") // PENDING, MAKEUP_CONFIRMED, CANCELLED, EXPIRED(legacy)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
