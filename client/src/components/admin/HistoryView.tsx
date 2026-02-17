@@ -91,11 +91,13 @@ export function HistoryView() {
                 return <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300">振替済み</Badge>;
             case "EXPIRED":
             case "CANCELLED":
-                return <Badge variant="outline" className="bg-gray-50 text-gray-500 border-gray-300">キャンセル</Badge>;
+                return <Badge variant="outline" className="bg-gray-50 text-gray-500 border-gray-300">キャンセル済み</Badge>;
             case "確定":
                 return <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300">確定</Badge>;
+            case "キャンセル":
+            case "辞退":
             case "却下":
-                return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-300">却下</Badge>;
+                return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-300">キャンセル済み</Badge>;
             default:
                 return <Badge variant="outline">{status}</Badge>;
         }

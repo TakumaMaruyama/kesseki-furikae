@@ -83,9 +83,8 @@ function AppContent() {
           <Link href="/status">
             <Button
               variant="default"
-              size="sm"
               data-testid="link-status"
-              className="bg-primary hover:bg-primary/90 shadow-sm"
+              className="h-10 px-4 text-sm font-semibold bg-primary hover:bg-primary/90 shadow-sm"
             >
               予約確認
             </Button>

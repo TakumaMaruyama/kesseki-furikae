@@ -11,6 +11,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ListIcon, CalendarIcon, InfoIcon, LogOutIcon, Loader2 } from "lucide-react";
 import type { ClassSlot } from "@shared/schema";
 import { formatJstDate, parseJstDate } from "@shared/jst";
+import { getRemainingCapacity } from "@shared/capacity";
 import { Calendar } from "@/components/ui/calendar";
 
 // Import extracted admin components
@@ -487,7 +488,7 @@ export default function AdminPage() {
                                           <div className="grid grid-cols-2 gap-2 text-sm">
                                             <div>
                                               <span className="text-muted-foreground">振替可能枠: </span>
-                                              <span className="font-semibold">{slot.capacityLimit - slot.capacityCurrent}</span>
+                                              <span className="font-semibold">{Math.max(0, slot.capacityLimit - slot.capacityCurrent)}</span>
                                             </div>
                                             <div>
                                               <span className="text-muted-foreground">使用済み: </span>
@@ -497,7 +498,7 @@ export default function AdminPage() {
                                           <div className="text-sm">
                                             <span className="text-muted-foreground">残り枠数: </span>
                                             <span className="text-lg font-bold text-primary">
-                                              {(slot.capacityLimit - slot.capacityCurrent) - slot.capacityMakeupUsed}
+                                              {getRemainingCapacity(slot)}
                                             </span>
                                           </div>
                                         </div>
@@ -610,7 +611,7 @@ export default function AdminPage() {
                                           <div>
                                             <p className="text-xs text-muted-foreground mb-1">振替可能枠（自動計算）</p>
                                             <p className="font-semibold">
-                                              {slot.capacityLimit - slot.capacityCurrent} 枠
+                                              {Math.max(0, slot.capacityLimit - slot.capacityCurrent)} 枠
                                             </p>
                                             <p className="text-xs text-muted-foreground">
                                               使用済み: {slot.capacityMakeupUsed}
@@ -619,7 +620,7 @@ export default function AdminPage() {
                                           <div>
                                             <p className="text-xs text-muted-foreground mb-1">残り枠数</p>
                                             <p className="text-lg font-bold text-primary">
-                                              {(slot.capacityLimit - slot.capacityCurrent) - slot.capacityMakeupUsed}
+                                              {getRemainingCapacity(slot)}
                                             </p>
                                           </div>
                                         </div>

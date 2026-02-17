@@ -8,6 +8,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { apiRequest } from "@/lib/queryClient";
 import { CheckCircleIcon, XCircleIcon, CalendarIcon } from "lucide-react";
 import type { LessonWithStatus, LessonStatus } from "./types";
+import { getActualCurrent, getRemainingCapacity } from "@shared/capacity";
 
 export function LessonsStatusView() {
     const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -131,11 +132,11 @@ export function LessonsStatusView() {
                                             </div>
                                             <div>
                                                 <p className="text-xs text-muted-foreground">現在</p>
-                                                <p className="font-semibold">{lessonStatus.slot.capacityCurrent}</p>
+                                                <p className="font-semibold">{getActualCurrent(lessonStatus.slot)}</p>
                                             </div>
                                             <div>
-                                                <p className="text-xs text-muted-foreground">振替可能枠（自動計算）</p>
-                                                <p className="font-semibold">{lessonStatus.slot.capacityLimit - lessonStatus.slot.capacityCurrent}</p>
+                                                <p className="text-xs text-muted-foreground">残り枠（自動計算）</p>
+                                                <p className="font-semibold">{getRemainingCapacity(lessonStatus.slot)}</p>
                                             </div>
                                         </div>
                                     </div>

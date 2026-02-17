@@ -11,7 +11,9 @@
     "db:push": "drizzle-kit push",
     "ops:verify-slot-scripts": "tsx scripts/verify-slot-ops.ts",
     "slots:audit-time": "tsx scripts/audit-slot-time-drift.ts",
-    "slots:repair-time": "tsx scripts/repair-slot-time-drift.ts"
+    "slots:repair-time": "tsx scripts/repair-slot-time-drift.ts",
+    "slots:audit-attendance": "tsx scripts/audit-attendance-consistency.ts",
+    "slots:repair-attendance": "tsx scripts/repair-attendance-consistency.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

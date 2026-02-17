@@ -41,9 +41,12 @@ function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, { variant: "default" | "secondary" | "destructive" | "outline", label: string }> = {
     "PENDING": { variant: "secondary", label: "振替待ち" },
     "MAKEUP_CONFIRMED": { variant: "default", label: "振替確定" },
-    "EXPIRED": { variant: "destructive", label: "期限切れ" },
+    "EXPIRED": { variant: "destructive", label: "キャンセル済み" },
+    "CANCELLED": { variant: "destructive", label: "キャンセル済み" },
     "確定": { variant: "default", label: "確定" },
-    "却下": { variant: "destructive", label: "キャンセル済" },
+    "却下": { variant: "destructive", label: "キャンセル済み" },
+    "キャンセル": { variant: "destructive", label: "キャンセル済み" },
+    "辞退": { variant: "destructive", label: "キャンセル済み" },
     "期限切れ": { variant: "destructive", label: "期限切れ" },
   };
 
@@ -231,7 +234,7 @@ export default function StatusPage() {
                               {format(new Date(absence.makeupDeadline), "yyyy年M月d日", { locale: ja })}
                             </div>
                           </div>
-                          {absence.makeupStatus !== "EXPIRED" && absence.makeupStatus !== "MAKEUP_CONFIRMED" && (
+                          {absence.makeupStatus === "PENDING" && (
                             <div className="mt-4 flex gap-2">
                               <Link href={`/absence?token=${absence.resumeToken}`}>
                                 <Button size="sm" data-testid={`button-book-${absence.id}`}>

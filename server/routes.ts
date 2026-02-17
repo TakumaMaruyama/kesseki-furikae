@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
 import { classSlots, absences, requests } from "@shared/schema";
-import { eq, and, gte, lte, lt, asc, inArray } from "drizzle-orm";
+import { eq, and, gte, lte, lt, asc, inArray, sql } from "drizzle-orm";
 import {
   searchSlotsRequestSchema,
   bookRequestSchema,
@@ -30,6 +30,7 @@ import {
   parseJstDateTime,
   startOfJstDay,
 } from "@shared/jst";
+import { getActualCurrent, getRemainingCapacity, hasRemainingCapacity } from "@shared/capacity";
 
 // Admin authentication middleware
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -74,6 +75,198 @@ async function getSlotAbsencesAndMakeups(slotId: string) {
     absences: slotAbsences,
     makeupRequests,
   };
+}
+
+const ABSENCE_CANCELLED_STATUSES = new Set(["CANCELLED", "EXPIRED"]);
+const REQUEST_CANCELLED_STATUSES = new Set(["却下", "期限切れ", "キャンセル", "辞退"]);
+
+function isAbsenceCancelledStatus(status: string | null | undefined): boolean {
+  return !!status && ABSENCE_CANCELLED_STATUSES.has(status);
+}
+
+function isRequestCancelledStatus(status: string | null | undefined): boolean {
+  return !!status && REQUEST_CANCELLED_STATUSES.has(status);
+}
+
+function isWithinAbsenceGracePeriod(absenceCreatedAt: Date | null | undefined): boolean {
+  const createdAt = absenceCreatedAt || new Date();
+  const now = new Date();
+  return now.getTime() - createdAt.getTime() <= 10 * 60 * 1000;
+}
+
+type CancelAbsenceOptions = {
+  enforceGraceRule: boolean;
+};
+
+type CancelAbsenceResult = {
+  childName: string;
+  alreadyCancelled: boolean;
+};
+
+async function cancelAbsenceWithRelated(absenceId: string, options: CancelAbsenceOptions): Promise<CancelAbsenceResult> {
+  return db.transaction(async (tx) => {
+    const [absence] = await tx.select().from(absences).where(eq(absences.id, absenceId));
+    if (!absence) {
+      throw new Error("NOT_FOUND_ABSENCE");
+    }
+
+    if (isAbsenceCancelledStatus(absence.makeupStatus)) {
+      if (absence.makeupStatus !== "CANCELLED") {
+        await tx
+          .update(absences)
+          .set({ makeupStatus: "CANCELLED", updatedAt: new Date() })
+          .where(eq(absences.id, absence.id));
+      }
+
+      return {
+        childName: absence.childName,
+        alreadyCancelled: true,
+      };
+    }
+
+    if (options.enforceGraceRule && !isWithinAbsenceGracePeriod(absence.createdAt)) {
+      const [originalSlot] = await tx.select().from(classSlots).where(eq(classSlots.id, absence.originalSlotId));
+      if (!originalSlot) {
+        throw new Error("ORIGINAL_SLOT_NOT_FOUND");
+      }
+      if (!hasRemainingCapacity(originalSlot, 1)) {
+        throw new Error("GRACE_RULE_BLOCKED");
+      }
+    }
+
+    const [claimedAbsence] = await tx
+      .update(absences)
+      .set({
+        makeupStatus: "CANCELLED",
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(absences.id, absence.id),
+        sql`${absences.makeupStatus} NOT IN ('CANCELLED', 'EXPIRED')`,
+      ))
+      .returning();
+
+    if (!claimedAbsence) {
+      return {
+        childName: absence.childName,
+        alreadyCancelled: true,
+      };
+    }
+
+    const relatedRequests = await tx.select().from(requests).where(eq(requests.absenceId, absence.id));
+    for (const request of relatedRequests) {
+      if (request.status === "確定") {
+        await tx
+          .update(classSlots)
+          .set({
+            capacityMakeupUsed: sql`GREATEST(0, ${classSlots.capacityMakeupUsed} - 1)`,
+            updatedAt: new Date(),
+          })
+          .where(eq(classSlots.id, request.toSlotId));
+
+        await tx
+          .update(requests)
+          .set({
+            status: "却下",
+          })
+          .where(eq(requests.id, request.id));
+        continue;
+      }
+
+      if (request.status === "キャンセル" || request.status === "辞退") {
+        await tx
+          .update(requests)
+          .set({
+            status: "却下",
+          })
+          .where(eq(requests.id, request.id));
+      }
+    }
+
+    await tx
+      .update(classSlots)
+      .set({
+        capacityCurrent: sql`${classSlots.capacityCurrent} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(classSlots.id, absence.originalSlotId));
+
+    return {
+      childName: absence.childName,
+      alreadyCancelled: false,
+    };
+  });
+}
+
+type CancelRequestResult = {
+  request: typeof requests.$inferSelect;
+  slot: typeof classSlots.$inferSelect | undefined;
+  alreadyCancelled: boolean;
+  wasConfirmed: boolean;
+};
+
+async function cancelRequestUnified(requestId: string): Promise<CancelRequestResult> {
+  return db.transaction(async (tx) => {
+    const [request] = await tx.select().from(requests).where(eq(requests.id, requestId));
+    if (!request) {
+      throw new Error("NOT_FOUND_REQUEST");
+    }
+
+    const [slot] = await tx.select().from(classSlots).where(eq(classSlots.id, request.toSlotId));
+
+    if (isRequestCancelledStatus(request.status)) {
+      if (request.status !== "却下") {
+        await tx
+          .update(requests)
+          .set({
+            status: "却下",
+          })
+          .where(eq(requests.id, request.id));
+      }
+
+      return {
+        request: { ...request, status: "却下" },
+        slot,
+        alreadyCancelled: true,
+        wasConfirmed: false,
+      };
+    }
+
+    const wasConfirmed = request.status === "確定";
+    if (wasConfirmed) {
+      await tx
+        .update(classSlots)
+        .set({
+          capacityMakeupUsed: sql`GREATEST(0, ${classSlots.capacityMakeupUsed} - 1)`,
+          updatedAt: new Date(),
+        })
+        .where(eq(classSlots.id, request.toSlotId));
+    }
+
+    await tx
+      .update(requests)
+      .set({
+        status: "却下",
+      })
+      .where(eq(requests.id, request.id));
+
+    if (wasConfirmed && request.absenceId) {
+      const [absence] = await tx.select().from(absences).where(eq(absences.id, request.absenceId));
+      if (absence && absence.makeupStatus === "MAKEUP_CONFIRMED") {
+        await tx
+          .update(absences)
+          .set({ makeupStatus: "PENDING", updatedAt: new Date() })
+          .where(eq(absences.id, absence.id));
+      }
+    }
+
+    return {
+      request: { ...request, status: "却下" },
+      slot,
+      alreadyCancelled: false,
+      wasConfirmed,
+    };
+  });
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -275,7 +468,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "無効なトークンです" });
       }
 
-      if (absence.makeupStatus === "CANCELLED") {
+      if (isAbsenceCancelledStatus(absence.makeupStatus)) {
         return res.status(400).json({ error: "この欠席は既にキャンセルされています" });
       }
 
@@ -304,63 +497,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "無効なトークンです" });
       }
 
-      if (absence.makeupStatus === "CANCELLED") {
-        return res.status(400).json({ error: "この欠席は既にキャンセルされています" });
-      }
-
-      const now = new Date();
-      const createdAt = absence.createdAt || new Date();
-      const timeSinceCreation = now.getTime() - createdAt.getTime();
-      const gracePeriod = 10 * 60 * 1000; // 10 minutes
-
-      if (timeSinceCreation > gracePeriod) {
-        if (absence.originalSlotId) {
-          const slot = await storage.getClassSlotById(absence.originalSlotId);
-          if (slot) {
-            const remainingSlots = (slot.capacityLimit - slot.capacityCurrent) - (slot.capacityMakeupUsed || 0);
-            if (remainingSlots < 1) {
-              return res.status(400).json({
-                error: "10分の猶予期間を過ぎているため、元のレッスン枠に空きがない場合はキャンセルできません"
-              });
-            }
-          }
-        }
-      }
-
-      const relatedRequests = await storage.getRequestsByAbsenceId(absence.id);
-
-      for (const request of relatedRequests) {
-        if (request.status === "確定") {
-          await storage.updateRequest(request.id, {
-            status: "キャンセル",
-            cancelToken: null,
-            declineToken: null,
-          });
-
-          const slot = await storage.getClassSlotById(request.toSlotId);
-          if (slot) {
-            await storage.decrementClassSlotMakeup(request.toSlotId);
-          }
-        }
-      }
-
-      if (absence.originalSlotId) {
-        const slot = await storage.getClassSlotById(absence.originalSlotId);
-        if (slot) {
-          await storage.incrementClassSlotCurrent(absence.originalSlotId);
-        }
-      }
-
-      await storage.updateAbsence(absence.id, {
-        makeupStatus: "CANCELLED",
-      });
+      const result = await cancelAbsenceWithRelated(absence.id, { enforceGraceRule: true });
 
       res.json({
         success: true,
-        message: "欠席連絡をキャンセルしました",
-        childName: absence.childName,
+        message: result.alreadyCancelled ? "欠席連絡は既にキャンセル済みです。" : "欠席連絡をキャンセルしました",
+        childName: result.childName,
+        alreadyCancelled: result.alreadyCancelled,
       });
     } catch (error: any) {
+      if (error.message === "GRACE_RULE_BLOCKED") {
+        return res.status(400).json({
+          error: "10分の猶予期間を過ぎているため、元のレッスン枠に空きがない場合はキャンセルできません",
+        });
+      }
+      if (error.message === "ORIGINAL_SLOT_NOT_FOUND") {
+        return res.status(400).json({ error: "元のレッスン枠が見つかりません。" });
+      }
       res.status(500).json({ error: error.message });
     }
   });
@@ -385,56 +538,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "確認コードが一致しません。" });
       }
 
-      if (absence.makeupStatus === "EXPIRED") {
-        return res.status(400).json({ error: "キャンセル済みの欠席連絡は再度キャンセルできません。" });
-      }
+      const result = await cancelAbsenceWithRelated(absence.id, { enforceGraceRule: true });
 
-      const now = new Date();
-      const tenMinutesAfterCreation = new Date(absence.createdAt!);
-      tenMinutesAfterCreation.setMinutes(tenMinutesAfterCreation.getMinutes() + 10);
-      const isWithin10Minutes = now <= tenMinutesAfterCreation;
-
-      if (!isWithin10Minutes) {
-        const originalSlot = await storage.getClassSlotById(absence.originalSlotId);
-
-        if (!originalSlot) {
-          return res.status(400).json({
-            error: "元のレッスン枠が見つかりません。",
-          });
-        }
-
-        const originalSlotAvailable = originalSlot.capacityCurrent < originalSlot.capacityLimit;
-
-        if (!originalSlotAvailable) {
-          return res.status(400).json({
-            error: "欠席登録から10分以上経過しているため、元のレッスンに空きがない場合は欠席キャンセルできません。",
-          });
-        }
-      }
-
-      // 関連する振替予約をすべてキャンセル
-      const relatedRequests = await storage.getRequestsByAbsenceId(absence.id);
-      const activeRequests = relatedRequests.filter(r => r.status === "確定");
-
-      for (const request of activeRequests) {
-        const slot = await storage.getClassSlotById(request.toSlotId);
-        if (!slot) continue;
-
-        await storage.decrementClassSlotMakeup(request.toSlotId);
-
-        await storage.updateRequest(request.id, { status: "却下" });
-      }
-
-      // 元のレッスン枠に戻す
-      const originalSlot = await storage.getClassSlotById(absence.originalSlotId);
-      if (originalSlot) {
-        await storage.incrementClassSlotCurrent(absence.originalSlotId);
-      }
-
-      await storage.updateAbsence(absence.id, { makeupStatus: "EXPIRED" });
-
-      res.json({ success: true, message: "欠席連絡をキャンセルしました。" });
+      res.json({
+        success: true,
+        message: result.alreadyCancelled ? "欠席連絡は既にキャンセル済みです。" : "欠席連絡をキャンセルしました。",
+        alreadyCancelled: result.alreadyCancelled,
+      });
     } catch (error: any) {
+      if (error.message === "GRACE_RULE_BLOCKED") {
+        return res.status(400).json({
+          error: "欠席登録から10分以上経過しているため、元のレッスンに空きがない場合は欠席キャンセルできません。",
+        });
+      }
+      if (error.message === "ORIGINAL_SLOT_NOT_FOUND") {
+        return res.status(400).json({ error: "元のレッスン枠が見つかりません。" });
+      }
       res.status(400).json({ error: error.message });
     }
   });
@@ -459,23 +578,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "確認コードが一致しません。" });
       }
 
-      if (request.status === "却下" || request.status === "期限切れ") {
-        return res.status(400).json({ error: "この予約は既にキャンセル済みです。" });
-      }
-
-      await storage.updateRequest(requestId, { status: "却下" });
-
-      const slot = await storage.getClassSlotById(request.toSlotId);
-
-      if (request.status === "確定" && slot) {
-        await storage.decrementClassSlotMakeup(request.toSlotId);
-
-        if (request.absenceId) {
-          await storage.updateAbsence(request.absenceId, { makeupStatus: "PENDING" });
-        }
-      }
-
-      res.json({ success: true, message: "予約をキャンセルしました。" });
+      const result = await cancelRequestUnified(requestId);
+      res.json({
+        success: true,
+        message: result.alreadyCancelled ? "予約は既にキャンセル済みです。" : "予約をキャンセルしました。",
+        alreadyCancelled: result.alreadyCancelled,
+      });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -710,37 +818,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "欠席連絡が見つかりません" });
       }
 
-      if (absence.makeupStatus === "EXPIRED" || absence.makeupStatus === "CANCELLED") {
-        return res.status(400).json({ error: "この欠席は既にキャンセル済みです" });
-      }
-
-      // Cancel related requests
-      const relatedRequests = await storage.getRequestsByAbsenceId(absence.id);
-      for (const request of relatedRequests) {
-        if (request.status === "確定") {
-          const slot = await storage.getClassSlotById(request.toSlotId);
-          if (slot) {
-            await storage.decrementClassSlotMakeup(request.toSlotId);
-          }
-          await storage.updateRequest(request.id, { status: "却下" });
-        }
-      }
-
-      // Restore original slot capacity
-      const originalSlot = await storage.getClassSlotById(absence.originalSlotId);
-      if (originalSlot) {
-        await storage.incrementClassSlotCurrent(absence.originalSlotId);
-      }
-
-      // Mark absence as expired
-      await storage.updateAbsence(absenceId, { makeupStatus: "EXPIRED" });
+      const result = await cancelAbsenceWithRelated(absence.id, { enforceGraceRule: true });
 
       res.json({
         success: true,
-        message: "欠席連絡をキャンセルしました",
-        childName: absence.childName
+        message: result.alreadyCancelled ? "欠席連絡は既にキャンセル済みです。" : "欠席連絡をキャンセルしました",
+        childName: result.childName,
+        alreadyCancelled: result.alreadyCancelled,
       });
     } catch (error: any) {
+      if (error.message === "GRACE_RULE_BLOCKED") {
+        return res.status(400).json({
+          error: "欠席登録から10分以上経過しているため、元のレッスンに空きがない場合は欠席キャンセルできません。",
+        });
+      }
+      if (error.message === "ORIGINAL_SLOT_NOT_FOUND") {
+        return res.status(400).json({ error: "元のレッスン枠が見つかりません。" });
+      }
       res.status(500).json({ error: error.message });
     }
   });
@@ -755,29 +849,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "振替予約が見つかりません" });
       }
 
-      if (request.status === "却下" || request.status === "期限切れ") {
-        return res.status(400).json({ error: "この予約は既にキャンセル済みです" });
-      }
-
-      // Update slot capacity if it was confirmed
-      if (request.status === "確定") {
-        const slot = await storage.getClassSlotById(request.toSlotId);
-        if (slot) {
-          await storage.decrementClassSlotMakeup(request.toSlotId);
-        }
-
-        // Reset absence status to PENDING if exists
-        if (request.absenceId) {
-          await storage.updateAbsence(request.absenceId, { makeupStatus: "PENDING" });
-        }
-      }
-
-      await storage.updateRequest(requestId, { status: "却下" });
+      const result = await cancelRequestUnified(requestId);
 
       res.json({
         success: true,
-        message: "振替予約をキャンセルしました",
-        childName: request.childName
+        message: result.alreadyCancelled ? "振替予約は既にキャンセル済みです。" : "振替予約をキャンセルしました",
+        childName: result.request.childName,
+        alreadyCancelled: result.alreadyCancelled,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -963,53 +1041,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "欠席連絡が見つかりません。" });
       }
 
-      if (absence.makeupStatus === "EXPIRED") {
-        return res.status(400).json({ error: "キャンセル済みの欠席連絡は再度キャンセルできません。" });
-      }
+      const result = await cancelAbsenceWithRelated(absence.id, { enforceGraceRule: true });
 
-      const now = new Date();
-      const tenMinutesAfterCreation = new Date(absence.createdAt!);
-      tenMinutesAfterCreation.setMinutes(tenMinutesAfterCreation.getMinutes() + 10);
-      const isWithin10Minutes = now <= tenMinutesAfterCreation;
-
-      if (!isWithin10Minutes) {
-        const originalSlot = await storage.getClassSlotById(absence.originalSlotId);
-
-        if (!originalSlot) {
-          return res.status(400).json({
-            error: "元のレッスン枠が見つかりません。",
-          });
-        }
-
-        const originalSlotAvailable = originalSlot.capacityCurrent < originalSlot.capacityLimit;
-
-        if (!originalSlotAvailable) {
-          return res.status(400).json({
-            error: "欠席登録から10分以上経過しているため、元のレッスンに空きがない場合は欠席キャンセルできません。",
-          });
-        }
-      }
-
-      const relatedRequests = await storage.getRequestsByAbsenceId(absence.id);
-      const activeRequests = relatedRequests.filter(r => r.status === "確定");
-
-      for (const request of activeRequests) {
-        const slot = await storage.getClassSlotById(request.toSlotId);
-        if (!slot) continue;
-
-        await storage.decrementClassSlotMakeup(request.toSlotId);
-
-        await storage.updateRequest(request.id, { status: "却下" });
-      }
-
-      const originalSlot = await storage.getClassSlotById(absence.originalSlotId);
-      if (originalSlot) {
-        await storage.incrementClassSlotCurrent(absence.originalSlotId);
-      }
-
-      await storage.updateAbsence(absence.id, { makeupStatus: "EXPIRED" });
-
-      if (absence.contactEmail) {
+      if (!result.alreadyCancelled && absence.contactEmail) {
         try {
           await sendCancellationEmail(
             absence.contactEmail,
@@ -1023,10 +1057,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({
         success: true,
-        message: "欠席連絡をキャンセルしました。",
-        childName: absence.childName
+        message: result.alreadyCancelled ? "欠席連絡は既にキャンセル済みです。" : "欠席連絡をキャンセルしました。",
+        childName: result.childName,
+        alreadyCancelled: result.alreadyCancelled,
       });
     } catch (error: any) {
+      if (error.message === "GRACE_RULE_BLOCKED") {
+        return res.status(400).json({
+          error: "欠席登録から10分以上経過しているため、元のレッスンに空きがない場合は欠席キャンセルできません。",
+        });
+      }
+      if (error.message === "ORIGINAL_SLOT_NOT_FOUND") {
+        return res.status(400).json({ error: "元のレッスン枠が見つかりません。" });
+      }
       res.status(400).json({ error: error.message });
     }
   });
@@ -1051,7 +1094,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       const results = slots.map(slot => {
-        const remainingSlots = (slot.capacityLimit - slot.capacityCurrent) - (slot.capacityMakeupUsed || 0);
+        const remainingSlots = getRemainingCapacity(slot);
+        const actualCurrent = getActualCurrent(slot);
         let statusCode: "〇" | "△" | "×";
         let statusText: string;
 
@@ -1078,6 +1122,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           capacityLimit: slot.capacityLimit,
           capacityCurrent: slot.capacityCurrent,
           capacityMakeupUsed: slot.capacityMakeupUsed || 0,
+          actualCurrent,
         };
       });
 
@@ -1091,83 +1136,138 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const data = bookRequestSchema.parse(req.body);
 
-      const slot = await storage.getClassSlotById(data.toSlotId);
-      if (!slot) {
-        return res.status(404).json({ success: false, message: "指定された枠が見つかりません。" });
-      }
-
-      if (slot.classBand !== data.declaredClassBand) {
-        return res.status(400).json({ success: false, message: "クラス帯が一致しません。" });
-      }
-
-      const slotStartDateTime = getCanonicalSlotStartDateTime(slot);
-      if (slotStartDateTime <= new Date()) {
-        return res.status(400).json({ success: false, message: "この枠は開始時刻を過ぎているため予約できません。" });
-      }
-
-      const remainingSlots = (slot.capacityLimit - slot.capacityCurrent) - (slot.capacityMakeupUsed || 0);
-      if (remainingSlots < 1) {
-        return res.status(400).json({ success: false, message: "この枠は満席のため予約できません。" });
-      }
-
-      // Check for duplicate registration by same person for same slot
-      const existingRequests = await storage.getRequestsBySlotId(data.toSlotId);
-      const duplicateRequest = existingRequests.find(
-        r => r.status === "確定" && r.childName === data.childName
-      );
-      if (duplicateRequest) {
-        return res.status(400).json({
-          success: false,
-          message: "同じお子様は既にこの枠に登録済みです。重複して登録することはできません。"
-        });
-      }
-
-      let contactEmail: string | null = null;
-      let confirmCode: string | null = null;
-
-      if (data.absenceId) {
-        const absence = await storage.getAbsenceById(data.absenceId);
-        if (absence) {
-          contactEmail = absence.contactEmail;
-          confirmCode = absence.confirmCode;
-          await storage.updateAbsence(data.absenceId, { makeupStatus: "MAKEUP_CONFIRMED" });
-        }
-      }
-
+      const now = new Date();
       const cancelToken = createId();
       const requestId = createId();
+      const bookingResult = await db.transaction(async (tx) => {
+        const [slot] = await tx.select().from(classSlots).where(eq(classSlots.id, data.toSlotId));
+        if (!slot) {
+          throw new Error("BOOK_SLOT_NOT_FOUND");
+        }
 
-      const request = await storage.createRequest({
-        id: requestId,
-        userId: null,
-        childId: data.childId || null,
-        absenceId: data.absenceId || null,
-        childName: data.childName,
-        declaredClassBand: data.declaredClassBand,
-        absentDate: parseJstDate(data.absentDateISO),
-        toSlotId: data.toSlotId,
-        status: "確定",
-        contactEmail: contactEmail,
-        confirmToken: null,
-        declineToken: null,
-        cancelToken: cancelToken,
-        confirmCode: confirmCode,
-        toSlotStartDateTime: slotStartDateTime,
+        if (slot.classBand !== data.declaredClassBand) {
+          throw new Error("BOOK_CLASS_BAND_MISMATCH");
+        }
+
+        const slotStartDateTime = getCanonicalSlotStartDateTime(slot);
+        if (slotStartDateTime <= now) {
+          throw new Error("BOOK_SLOT_STARTED");
+        }
+
+        if (!hasRemainingCapacity(slot, 1)) {
+          throw new Error("BOOK_SLOT_FULL");
+        }
+
+        const existingRequests = await tx.select().from(requests).where(eq(requests.toSlotId, data.toSlotId));
+        const duplicateRequest = existingRequests.find(
+          r => r.status === "確定" && r.childName === data.childName
+        );
+        if (duplicateRequest) {
+          throw new Error("BOOK_DUPLICATE_CHILD");
+        }
+
+        let confirmCode: string | null = null;
+        let txContactEmail: string | null = null;
+        let claimedAbsenceId: string | null = null;
+        if (data.absenceId) {
+          const [absence] = await tx.select().from(absences).where(eq(absences.id, data.absenceId));
+          if (!absence) {
+            throw new Error("BOOK_ABSENCE_NOT_FOUND");
+          }
+          if (isAbsenceCancelledStatus(absence.makeupStatus)) {
+            throw new Error("BOOK_ABSENCE_CANCELLED");
+          }
+          if (absence.makeupStatus !== "PENDING") {
+            throw new Error("BOOK_ABSENCE_NOT_PENDING");
+          }
+          if (endOfJstDay(absence.makeupDeadline) < now) {
+            throw new Error("BOOK_ABSENCE_DEADLINE");
+          }
+
+          const alreadyConfirmed = await tx.select().from(requests).where(and(
+            eq(requests.absenceId, absence.id),
+            eq(requests.status, "確定"),
+          ));
+          if (alreadyConfirmed.length > 0) {
+            throw new Error("BOOK_ABSENCE_ALREADY_CONFIRMED");
+          }
+
+          const [claimedAbsence] = await tx
+            .update(absences)
+            .set({
+              makeupStatus: "MAKEUP_CONFIRMED",
+              updatedAt: new Date(),
+            })
+            .where(and(
+              eq(absences.id, absence.id),
+              eq(absences.makeupStatus, "PENDING"),
+            ))
+            .returning();
+          if (!claimedAbsence) {
+            throw new Error("BOOK_ABSENCE_NOT_PENDING");
+          }
+
+          claimedAbsenceId = claimedAbsence.id;
+          txContactEmail = claimedAbsence.contactEmail;
+          confirmCode = claimedAbsence.confirmCode;
+        }
+
+        const [updatedSlot] = await tx
+          .update(classSlots)
+          .set({
+            capacityMakeupUsed: sql`${classSlots.capacityMakeupUsed} + 1`,
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(classSlots.id, data.toSlotId),
+            sql`${classSlots.capacityLimit} - ${classSlots.capacityCurrent} - ${classSlots.capacityMakeupUsed} >= 1`,
+          ))
+          .returning();
+        if (!updatedSlot) {
+          throw new Error("BOOK_SLOT_FULL");
+        }
+
+        const [request] = await tx.insert(requests).values({
+          id: requestId,
+          userId: null,
+          childId: data.childId || null,
+          absenceId: claimedAbsenceId || data.absenceId || null,
+          childName: data.childName,
+          declaredClassBand: data.declaredClassBand,
+          absentDate: parseJstDate(data.absentDateISO),
+          toSlotId: data.toSlotId,
+          status: "確定",
+          contactEmail: txContactEmail,
+          confirmToken: null,
+          declineToken: null,
+          cancelToken,
+          confirmCode,
+          toSlotStartDateTime: slotStartDateTime,
+        }).returning();
+
+        return {
+          contactEmail: txContactEmail,
+          slotForEmail: {
+            courseLabel: updatedSlot.courseLabel,
+            date: updatedSlot.date,
+            startTime: updatedSlot.startTime,
+            classBand: updatedSlot.classBand,
+          },
+          requestIdForEmail: request.id,
+        };
       });
 
-      await storage.incrementClassSlotMakeup(data.toSlotId);
-
-      if (contactEmail) {
+      if (bookingResult.contactEmail) {
         try {
           await sendMakeupConfirmationEmail(
-            contactEmail,
+            bookingResult.contactEmail,
             data.childName,
-            slot.courseLabel,
-            format(slot.date, "yyyy年M月d日(E)", { locale: ja }),
-            slot.startTime,
-            slot.classBand,
-            request.id,
-            cancelToken
+            bookingResult.slotForEmail.courseLabel,
+            format(bookingResult.slotForEmail.date, "yyyy年M月d日(E)", { locale: ja }),
+            bookingResult.slotForEmail.startTime,
+            bookingResult.slotForEmail.classBand,
+            bookingResult.requestIdForEmail,
+            cancelToken,
           );
         } catch (error: any) {
           console.error("振替確定メール送信エラー:", error.message);
@@ -1176,6 +1276,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ success: true, status: "確定", message: "振替予約が成立しました。" });
     } catch (error: any) {
+      if (error.message === "BOOK_SLOT_NOT_FOUND") {
+        return res.status(404).json({ success: false, message: "指定された枠が見つかりません。" });
+      }
+      if (error.message === "BOOK_CLASS_BAND_MISMATCH") {
+        return res.status(400).json({ success: false, message: "クラス帯が一致しません。" });
+      }
+      if (error.message === "BOOK_SLOT_STARTED") {
+        return res.status(400).json({ success: false, message: "この枠は開始時刻を過ぎているため予約できません。" });
+      }
+      if (error.message === "BOOK_SLOT_FULL") {
+        return res.status(400).json({ success: false, message: "この枠は満席のため予約できません。" });
+      }
+      if (error.message === "BOOK_DUPLICATE_CHILD") {
+        return res.status(400).json({
+          success: false,
+          message: "同じお子様は既にこの枠に登録済みです。重複して登録することはできません。",
+        });
+      }
+      if (error.message === "BOOK_ABSENCE_NOT_FOUND") {
+        return res.status(400).json({ success: false, message: "欠席情報が見つかりません。" });
+      }
+      if (error.message === "BOOK_ABSENCE_CANCELLED") {
+        return res.status(400).json({ success: false, message: "キャンセル済みの欠席連絡では予約できません。" });
+      }
+      if (error.message === "BOOK_ABSENCE_NOT_PENDING") {
+        return res.status(400).json({ success: false, message: "この欠席連絡は現在予約可能な状態ではありません。" });
+      }
+      if (error.message === "BOOK_ABSENCE_DEADLINE") {
+        return res.status(400).json({ success: false, message: "振替期限が過ぎているため予約できません。" });
+      }
+      if (error.message === "BOOK_ABSENCE_ALREADY_CONFIRMED") {
+        return res.status(400).json({ success: false, message: "この欠席連絡は既に振替予約が確定しています。" });
+      }
       res.status(400).json({ error: error.message });
     }
   });
@@ -1190,18 +1323,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "指定された枠が見つかりません。" });
       }
 
-      const oldRemainingSlots = (slot.capacityLimit - slot.capacityCurrent) - (slot.capacityMakeupUsed || 0);
-
       const updateData: any = {};
       if (data.capacityCurrent !== undefined) updateData.capacityCurrent = data.capacityCurrent;
       if (data.capacityMakeupUsed !== undefined) updateData.capacityMakeupUsed = data.capacityMakeupUsed;
 
       await storage.updateClassSlot(data.slotId, updateData);
-
-      const updatedSlot = await storage.getClassSlotById(data.slotId);
-      if (updatedSlot) {
-        const newRemainingSlots = (updatedSlot.capacityLimit - updatedSlot.capacityCurrent) - (updatedSlot.capacityMakeupUsed || 0);
-      }
 
       res.json({ success: true, message: "枠容量を更新しました。" });
     } catch (error: any) {
@@ -1228,25 +1354,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "無効なキャンセルトークンです" });
       }
 
-      if (request.status === "却下" || request.status === "期限切れ") {
-        return res.status(400).json({ error: "このリクエストは既にキャンセル済みです" });
-      }
-
-      const slot = await storage.getClassSlotById(request.toSlotId);
-
       const statusText = "振替予約";
 
-      await storage.updateRequest(requestId, { status: "却下" });
+      const result = await cancelRequestUnified(requestId);
+      const slot = result.slot;
 
-      if (request.status === "確定" && slot) {
-        await storage.decrementClassSlotMakeup(request.toSlotId);
-
-        if (request.absenceId) {
-          await storage.updateAbsence(request.absenceId, { makeupStatus: "PENDING" });
-        }
-      }
-
-      if (request.contactEmail && slot) {
+      if (!result.alreadyCancelled && request.contactEmail && slot) {
         try {
           await sendRequestCancellationEmail(
             request.contactEmail,
@@ -1254,7 +1367,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             slot.courseLabel,
             format(slot.date, "yyyy年M月d日(E)", { locale: ja }),
             slot.startTime,
-            request.status
+            request.status,
           );
         } catch (error) {
           console.error("キャンセルメール送信エラー:", error);
@@ -1263,10 +1376,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({
         success: true,
-        message: `${statusText}をキャンセルしました`,
+        message: result.alreadyCancelled ? `${statusText}は既にキャンセル済みです` : `${statusText}をキャンセルしました`,
         childName: request.childName,
         statusText: statusText,
-        wasConfirmed: request.status === "確定"
+        wasConfirmed: result.wasConfirmed,
+        alreadyCancelled: result.alreadyCancelled,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "エラーが発生しました" });
@@ -1372,7 +1486,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ));
       }
 
-      if (request.status !== "確定") {
+      if (request.status !== "確定" && !isRequestCancelledStatus(request.status)) {
         return res.status(400).send(renderPage(
           "既に処理されています",
           "このリクエストは既に処理されています。",
@@ -1380,16 +1494,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ));
       }
 
-      await storage.updateRequest(request.id, { status: "却下" });
-
-      const slot = await storage.getClassSlotById(request.toSlotId);
-      if (slot) {
-        await storage.decrementClassSlotMakeup(request.toSlotId);
-      }
-
-
-      if (request.absenceId) {
-        await storage.updateAbsence(request.absenceId, { makeupStatus: "PENDING" });
+      const result = await cancelRequestUnified(request.id);
+      if (result.alreadyCancelled) {
+        return res.status(400).send(renderPage(
+          "既に処理されています",
+          "このリクエストは既に処理されています。",
+          false
+        ));
       }
 
       res.send(renderPage(
@@ -1420,38 +1531,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "無効なキャンセルトークンです。" });
       }
 
-      if (request.status === "却下" || request.status === "期限切れ") {
-        return res.status(400).json({ error: "このリクエストは既にキャンセル済みです。" });
-      }
+      const result = await cancelRequestUnified(requestId);
 
-      await storage.updateRequest(requestId, { status: "却下" });
-
-      const slot = await storage.getClassSlotById(request.toSlotId);
-
-      if (request.status === "確定" && slot) {
-        await storage.decrementClassSlotMakeup(request.toSlotId);
-
-        if (request.absenceId) {
-          await storage.updateAbsence(request.absenceId, { makeupStatus: "PENDING" });
-        }
-      }
-
-      if (request.contactEmail && slot) {
+      if (!result.alreadyCancelled && request.contactEmail && result.slot) {
         try {
           await sendRequestCancellationEmail(
             request.contactEmail,
             request.childName,
-            slot.courseLabel,
-            format(slot.date, "yyyy年M月d日(E)", { locale: ja }),
-            slot.startTime,
-            request.status
+            result.slot.courseLabel,
+            format(result.slot.date, "yyyy年M月d日(E)", { locale: ja }),
+            result.slot.startTime,
+            request.status,
           );
         } catch (error) {
           console.error("キャンセルメール送信エラー:", error);
         }
       }
 
-      res.json({ success: true, message: "予約をキャンセルしました。" });
+      res.json({
+        success: true,
+        message: result.alreadyCancelled ? "予約は既にキャンセル済みです。" : "予約をキャンセルしました。",
+        alreadyCancelled: result.alreadyCancelled,
+      });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -1839,31 +1940,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "無効なトークンです" });
       }
 
-      if (request.status !== "確定") {
-        return res.status(400).json({ error: "この予約は既に処理されています" });
-      }
-
-      await storage.updateRequest(request.id, {
-        status: "辞退",
-        declineToken: null,
-      });
-
-      const slot = await storage.getClassSlotById(request.toSlotId);
-      if (slot) {
-        await storage.updateClassSlot(request.toSlotId, {
-          capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-        });
-      }
-
-      if (request.absenceId) {
-        await storage.updateAbsence(request.absenceId, {
-          makeupStatus: "PENDING",
-        });
-      }
+      const result = await cancelRequestUnified(request.id);
 
       res.json({
         success: true,
-        message: "振替予約を辞退しました",
+        message: result.alreadyCancelled ? "この予約は既に処理されています" : "振替予約を辞退しました",
+        alreadyCancelled: result.alreadyCancelled,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1911,32 +1993,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "無効なトークンです" });
       }
 
-      if (request.status !== "確定") {
-        return res.status(400).json({ error: "この予約は既に処理されています" });
-      }
-
-      await storage.updateRequest(request.id, {
-        status: "キャンセル",
-        cancelToken: null,
-      });
-
-      const slot = await storage.getClassSlotById(request.toSlotId);
-      if (slot) {
-        await storage.updateClassSlot(request.toSlotId, {
-          capacityMakeupUsed: Math.max(0, (slot.capacityMakeupUsed || 0) - 1),
-        });
-      }
-
-      if (request.absenceId) {
-        await storage.updateAbsence(request.absenceId, {
-          makeupStatus: "PENDING",
-        });
-      }
+      const result = await cancelRequestUnified(request.id);
 
       res.json({
         success: true,
-        message: "振替予約をキャンセルしました",
+        message: result.alreadyCancelled ? "振替予約は既にキャンセル済みです。" : "振替予約をキャンセルしました",
         childName: request.childName,
+        alreadyCancelled: result.alreadyCancelled,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
