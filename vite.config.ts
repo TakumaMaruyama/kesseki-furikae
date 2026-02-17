@@ -2,11 +2,56 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
   plugins: [
     react(),
     runtimeErrorOverlay(),
+    VitePWA({
+      registerType: "autoUpdate",
+      injectRegister: "auto",
+      includeAssets: [
+        "favicon.png",
+        "apple-touch-icon.png",
+        "pwa-192.png",
+        "pwa-512.png",
+      ],
+      manifest: {
+        name: "はまスイ 欠席・振替登録システム",
+        short_name: "はまスイ振替",
+        description:
+          "はまだ水泳教室の欠席連絡と振替希望受付システム。空き状況を確認して振替予約ができます。",
+        start_url: "/",
+        scope: "/",
+        display: "standalone",
+        lang: "ja",
+        theme_color: "#0072e5",
+        background_color: "#ffffff",
+        icons: [
+          {
+            src: "/pwa-192.png",
+            sizes: "192x192",
+            type: "image/png",
+          },
+          {
+            src: "/pwa-512.png",
+            sizes: "512x512",
+            type: "image/png",
+          },
+          {
+            src: "/pwa-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
+          },
+        ],
+      },
+      workbox: {
+        cleanupOutdatedCaches: true,
+        navigateFallback: "/index.html",
+      },
+    }),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
       ? [

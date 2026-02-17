@@ -1,4 +1,4 @@
-import { Switch, Route, Link, useLocation } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -12,7 +12,7 @@ import CancelRequestPage from "@/pages/cancel-request";
 import CancelPage from "@/pages/cancel";
 import DeclinePage from "@/pages/decline";
 import NotFound from "@/pages/not-found";
-import { Button } from "@/components/ui/button";
+import FloatingActionButtons from "@/components/FloatingActionButtons";
 
 function MainRouter() {
   return (
@@ -44,51 +44,10 @@ function AppContent() {
   const isAdmin = location === "/admin";
   const isStatus = location === "/status";
 
-  if (isAdmin) {
-    return (
-      <>
-        <AdminRouter />
-        <div className="fixed bottom-6 right-6 z-50">
-          <Link href="/">
-            <Button
-              size="lg"
-              data-testid="link-parent"
-              className="h-12 px-6 text-base font-semibold shadow-lg"
-            >
-              保護者向け画面
-            </Button>
-          </Link>
-        </div>
-      </>
-    );
-  }
-
   return (
     <>
-      <MainRouter />
-      <div className="fixed bottom-2 right-2 z-50 flex gap-2">
-        {!isStatus && (
-          <Link href="/status">
-            <Button
-              variant="default"
-              data-testid="link-status"
-              className="h-10 px-4 text-sm font-semibold bg-primary hover:bg-primary/90 shadow-sm"
-            >
-              予約確認
-            </Button>
-          </Link>
-        )}
-        <Link href="/admin">
-          <Button
-            variant="outline"
-            size="sm"
-            data-testid="link-admin"
-            className="h-10 px-3 text-xs font-semibold shadow-sm"
-          >
-            管理者
-          </Button>
-        </Link>
-      </div>
+      {isAdmin ? <AdminRouter /> : <MainRouter />}
+      <FloatingActionButtons isAdmin={isAdmin} isStatus={isStatus} />
     </>
   );
 }
