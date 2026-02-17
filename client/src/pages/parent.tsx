@@ -517,12 +517,12 @@ export default function ParentPage() {
                         <FormItem>
                           <FormLabel>欠席予定日</FormLabel>
                           <FormControl>
-                            <div className="relative">
+                            <div className="relative w-full min-w-0">
                               <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground pointer-events-none" />
                               <Input
                                 type="date"
                                 {...field}
-                                className="h-12 pl-10"
+                                className="block h-12 w-full min-w-0 max-w-full pl-10 text-sm"
                                 data-testid="input-absent-date"
                               />
                             </div>
