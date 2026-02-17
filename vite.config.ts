@@ -19,7 +19,7 @@ export default defineConfig({
       ],
       manifest: {
         name: "はまスイ 欠席・振替登録システム",
-        short_name: "はまスイ振替",
+        short_name: "はまスイ欠席・振替",
         description:
           "はまだ水泳教室の欠席連絡と振替希望受付システム。空き状況を確認して振替予約ができます。",
         start_url: "/",

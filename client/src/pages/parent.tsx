@@ -383,7 +383,7 @@ export default function ParentPage() {
               <CollapsibleTrigger className="w-full">
                 <CardHeader className="cursor-pointer hover:bg-primary/10 transition-colors">
                   <div className="flex items-center justify-between">
-                    <h2 className="text-xl font-bold flex items-center gap-2">
+                    <h2 className="text-base sm:text-lg md:text-xl font-bold flex items-center gap-2 whitespace-nowrap">
                       <InfoIcon className="w-5 h-5 text-primary" />
                       はじめての方へ - システムの使い方
                     </h2>
@@ -465,7 +465,7 @@ export default function ParentPage() {
             </Card>
           ) : (
             <Card className="border-2">
-              <CardContent className="p-6">
+              <CardContent className="p-4 sm:p-6">
                 <Form {...absenceForm}>
                   <form onSubmit={absenceForm.handleSubmit(onAbsenceSubmit)} className="space-y-6">
                     <FormField
@@ -517,15 +517,12 @@ export default function ParentPage() {
                         <FormItem>
                           <FormLabel>欠席予定日</FormLabel>
                           <FormControl>
-                            <div className="relative w-full min-w-0">
-                              <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground pointer-events-none" />
-                              <Input
-                                type="date"
-                                {...field}
-                                className="block h-12 w-full min-w-0 max-w-full pl-10 text-sm"
-                                data-testid="input-absent-date"
-                              />
-                            </div>
+                            <Input
+                              type="date"
+                              {...field}
+                              className="h-12 w-full min-w-0 max-w-full text-sm"
+                              data-testid="input-absent-date"
+                            />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
