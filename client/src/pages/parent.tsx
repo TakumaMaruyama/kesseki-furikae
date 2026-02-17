@@ -520,7 +520,7 @@ export default function ParentPage() {
                             <Input
                               type="date"
                               {...field}
-                              className="h-12 w-full min-w-0 max-w-full text-sm"
+                              className="block h-12 w-full min-w-0 max-w-full overflow-hidden pr-2 text-sm"
                               data-testid="input-absent-date"
                             />
                           </FormControl>
