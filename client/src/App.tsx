@@ -13,7 +13,6 @@ import CancelPage from "@/pages/cancel";
 import DeclinePage from "@/pages/decline";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
-import { Settings } from "lucide-react";
 
 function MainRouter() {
   return (
@@ -68,18 +67,7 @@ function AppContent() {
     <>
       <MainRouter />
       <div className="fixed bottom-2 right-2 z-50 flex gap-2">
-        {isStatus ? (
-          <Link href="/absence">
-            <Button
-              variant="default"
-              size="sm"
-              data-testid="link-absence"
-              className="shadow-sm"
-            >
-              欠席連絡
-            </Button>
-          </Link>
-        ) : (
+        {!isStatus && (
           <Link href="/status">
             <Button
               variant="default"
@@ -92,13 +80,12 @@ function AppContent() {
         )}
         <Link href="/admin">
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             data-testid="link-admin"
-            className="h-8 w-8 p-0 text-muted-foreground/30 hover:text-muted-foreground hover:bg-transparent"
+            className="h-10 px-3 text-xs font-semibold shadow-sm"
           >
-            <span className="sr-only">管理画面</span>
-            <Settings className="h-3 w-3" />
+            管理者
           </Button>
         </Link>
       </div>

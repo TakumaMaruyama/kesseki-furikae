@@ -164,7 +164,7 @@ export default function StatusPage() {
                   placeholder="6桁の確認コード"
                   value={confirmCode}
                   onChange={(e) => setConfirmCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  className="text-center text-2xl tracking-widest font-mono"
+                  className="text-center text-lg md:text-2xl tracking-[0.2em] placeholder:tracking-normal placeholder:text-xs md:placeholder:text-sm font-mono"
                   data-testid="input-confirm-code"
                 />
               </div>
@@ -351,7 +351,7 @@ export default function StatusPage() {
 
         <div className="mt-8 text-center">
           <Link href="/">
-            <Button variant="outline" data-testid="link-new-absence">
+            <Button data-testid="link-new-absence">
               新規欠席連絡へ
             </Button>
           </Link>
