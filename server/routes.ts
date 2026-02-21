@@ -1314,7 +1314,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
 
-  app.post("/admin/update-slot-capacity", async (req, res) => {
+  app.post("/admin/update-slot-capacity", requireAdmin, async (req, res) => {
     try {
       const data = updateSlotCapacityRequestSchema.parse(req.body);
 
@@ -1355,32 +1355,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const statusText = "振替予約";
-
-      const result = await cancelRequestUnified(requestId);
-      const slot = result.slot;
-
-      if (!result.alreadyCancelled && request.contactEmail && slot) {
-        try {
-          await sendRequestCancellationEmail(
-            request.contactEmail,
-            request.childName,
-            slot.courseLabel,
-            format(slot.date, "yyyy年M月d日(E)", { locale: ja }),
-            slot.startTime,
-            request.status,
-          );
-        } catch (error) {
-          console.error("キャンセルメール送信エラー:", error);
-        }
-      }
+      const canCancel = request.status === "確定";
+      const alreadyCancelled = isRequestCancelledStatus(request.status);
 
       res.json({
         success: true,
-        message: result.alreadyCancelled ? `${statusText}は既にキャンセル済みです` : `${statusText}をキャンセルしました`,
+        message: canCancel
+          ? `${statusText}をキャンセルできます`
+          : alreadyCancelled
+            ? `${statusText}は既にキャンセル済みです`
+            : "このリクエストは既に処理されています。",
+        requestId: request.id,
         childName: request.childName,
         statusText: statusText,
-        wasConfirmed: result.wasConfirmed,
-        alreadyCancelled: result.alreadyCancelled,
+        status: request.status,
+        canCancel,
+        alreadyCancelled,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "エラーが発生しました" });
@@ -1388,6 +1378,149 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/wait-decline", async (req, res) => {
+    const renderPage = (
+      title: string,
+      message: string,
+      isSuccess: boolean,
+      action?: { label: string; method: "GET" | "POST"; url: string },
+    ) => {
+      const actionHtml = action
+        ? `<form method="${action.method}" action="${action.url}" style="margin-top: 8px;"><button type="submit" class="button">${action.label}</button></form>`
+        : `<button class="button" onclick="window.history.back()">戻る</button>`;
+
+      return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans JP', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+      padding: 40px;
+      max-width: 500px;
+      text-align: center;
+    }
+    .icon {
+      font-size: 48px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: 24px;
+      color: #333;
+      margin-bottom: 15px;
+    }
+    p {
+      color: #666;
+      line-height: 1.6;
+      margin-bottom: 30px;
+    }
+    .button {
+      display: inline-block;
+      padding: 12px 30px;
+      background: #667eea;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 500;
+      transition: background 0.3s;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    .button:hover {
+      background: #5568d3;
+    }
+    .success .icon { color: #4caf50; }
+    .success h1 { color: #2e7d32; }
+    .error .icon { color: #f44336; }
+    .error h1 { color: #c62828; }
+  </style>
+</head>
+<body>
+  <div class="container ${isSuccess ? 'success' : 'error'}">
+    <div class="icon">${isSuccess ? '✓' : '✕'}</div>
+    <h1>${title}</h1>
+    <p>${message}</p>
+    ${actionHtml}
+  </div>
+</body>
+</html>`;
+    };
+
+    try {
+      const token = req.query.token as string;
+      if (!token) {
+        return res.status(400).send(renderPage(
+          "無効なリクエスト",
+          "リンクが正しくない、または期限切れの可能性があります。",
+          false
+        ));
+      }
+
+      const allRequests = await db.select().from(requests).where(eq(requests.declineToken, token));
+      const request = allRequests[0];
+
+      if (!request) {
+        return res.status(404).send(renderPage(
+          "リクエストが見つかりません",
+          "このリンクで指定されたリクエストが見つかりません。",
+          false
+        ));
+      }
+
+      if (request.status !== "確定" && !isRequestCancelledStatus(request.status)) {
+        return res.status(400).send(renderPage(
+          "既に処理されています",
+          "このリクエストは既に処理されています。",
+          false
+        ));
+      }
+
+      if (isRequestCancelledStatus(request.status)) {
+        return res.status(400).send(renderPage(
+          "既に処理されています",
+          "このリクエストは既に処理されています。",
+          false
+        ));
+      }
+
+      res.send(renderPage(
+        "辞退の確認",
+        `${request.childName}さんの振替予約を辞退しますか？`,
+        false,
+        {
+          label: "辞退を確定する",
+          method: "POST",
+          url: `/api/wait-decline?token=${encodeURIComponent(token)}`,
+        }
+      ));
+    } catch (error: any) {
+      res.status(500).send(renderPage(
+        "エラーが発生しました",
+        `予期しないエラーが発生しました。${error.message || "もう一度お試しください。"}`,
+        false
+      ));
+    }
+  });
+
+  app.post("/api/wait-decline", async (req, res) => {
     const renderPage = (title: string, message: string, isSuccess: boolean) => {
       return `<!DOCTYPE html>
 <html lang="ja">
@@ -1558,6 +1691,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+
+  app.get("/api/admin/slot-requests-count", requireAdmin, async (req, res) => {
+    try {
+      const { slotId } = req.query;
+      if (!slotId || typeof slotId !== "string") {
+        return res.status(400).json({ error: "slotIdが必要です" });
+      }
+
+      const slotRequests = await storage.getRequestsBySlotId(slotId);
+      const confirmedCount = slotRequests.filter((request) => request.status === "確定").length;
+
+      res.json({
+        slotId,
+        count: slotRequests.length,
+        confirmedCount,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
 
   app.get("/api/admin/slots", requireAdmin, async (req, res) => {
     try {
@@ -1845,7 +1998,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/settings", async (req, res) => {
+  app.get("/api/settings", requireAdmin, async (req, res) => {
     try {
       const settings = await storage.getGlobalSettings();
       res.json(settings || { id: 1, makeupWindowDays: 30, cutoffTime: "16:00" });
@@ -1854,7 +2007,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/settings", async (req, res) => {
+  app.put("/api/settings", requireAdmin, async (req, res) => {
     try {
       const { makeupWindowDays, cutoffTime } = req.body;
       const settings = await storage.updateGlobalSettings({ makeupWindowDays, cutoffTime });
@@ -1864,7 +2017,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/holidays", async (req, res) => {
+  app.get("/api/holidays", requireAdmin, async (req, res) => {
     try {
       const allHolidays = await storage.getAllHolidays();
       res.json(allHolidays);
@@ -1873,7 +2026,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/holidays", async (req, res) => {
+  app.post("/api/holidays", requireAdmin, async (req, res) => {
     try {
       const { date, name } = req.body;
       const holiday = await storage.createHoliday({ date: parseJstDate(date), name });
@@ -1883,7 +2036,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/holidays/:id", async (req, res) => {
+  app.delete("/api/holidays/:id", requireAdmin, async (req, res) => {
     try {
       const holidayId = req.params.id;
       const success = await storage.deleteHoliday(holidayId);

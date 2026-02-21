@@ -624,7 +624,7 @@ export default function ParentPage() {
             absenceData.makeupStatus === "MAKEUP_CONFIRMED" ? (
               <Card className="border-2 bg-muted/40">
                 <CardContent className="p-12 text-center text-muted-foreground">
-                  すでに振替予約が確定済みです。別の枠への変更は事務局へお問い合わせください。
+                  すでに振替予約が確定済みです。振替後の変更は「予約確認」のページからできます。
                 </CardContent>
               </Card>
             ) : isAbsenceCancelled(absenceData.makeupStatus) ? (
