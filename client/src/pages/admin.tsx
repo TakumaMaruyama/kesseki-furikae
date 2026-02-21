@@ -258,6 +258,52 @@ export default function AdminPage() {
     }
   };
 
+  const fetchSlotRequestsCount = async (slotId: string): Promise<{ count: number; confirmedCount: number }> => {
+    const response = await fetch(`/api/admin/slot-requests-count?slotId=${encodeURIComponent(slotId)}`, {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      let errorMessage = "申し込み件数の取得に失敗しました。";
+      try {
+        const errorBody = await response.json();
+        if (errorBody?.error) {
+          errorMessage = errorBody.error;
+        }
+      } catch {
+        // Ignore parse errors and use fallback message.
+      }
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json() as { count?: number; confirmedCount?: number };
+    return {
+      count: data.count ?? 0,
+      confirmedCount: data.confirmedCount ?? 0,
+    };
+  };
+
+  const confirmAndDeleteSlot = async (slot: ClassSlot) => {
+    try {
+      const { count, confirmedCount } = await fetchSlotRequestsCount(slot.id);
+
+      let message = `${slot.courseLabel}の枠を削除しますか？`;
+      if (count > 0) {
+        message = `${slot.courseLabel}の枠を削除しますか？\n\n※この枠には${count}件の申し込みがあります（確定${confirmedCount}件）。削除すると申し込みも全て削除されます。`;
+      }
+
+      if (confirm(message)) {
+        deleteSlotMutation.mutate(slot.id);
+      }
+    } catch (error: any) {
+      toast({
+        title: "取得エラー",
+        description: error.message || "申し込み件数の取得に失敗しました。",
+        variant: "destructive",
+      });
+    }
+  };
+
   if (isAuthenticated === null) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -516,19 +562,8 @@ export default function AdminPage() {
                                           編集
                                         </Button>
                                         <Button
-                                          onClick={async () => {
-                                            const response = await fetch(`/api/admin/slot-requests-count?slotId=${slot.id}`);
-                                            const data = await response.json();
-                                            const requestsCount = data.count || 0;
-
-                                            let message = `${slot.courseLabel}の枠を削除しますか？`;
-                                            if (requestsCount > 0) {
-                                              message = `${slot.courseLabel}の枠を削除しますか？\n\n※この枠には${requestsCount}件の申し込みがあります。削除すると申し込みも全て削除されます。`;
-                                            }
-
-                                            if (confirm(message)) {
-                                              deleteSlotMutation.mutate(slot.id);
-                                            }
+                                          onClick={() => {
+                                            confirmAndDeleteSlot(slot);
                                           }}
                                           variant="outline"
                                           size="sm"
@@ -638,20 +673,8 @@ export default function AdminPage() {
                                           編集
                                         </Button>
                                         <Button
-                                          onClick={async () => {
-                                            // 申し込み件数を確認
-                                            const response = await fetch(`/api/admin/slot-requests-count?slotId=${slot.id}`);
-                                            const data = await response.json();
-                                            const requestsCount = data.count || 0;
-
-                                            let message = `${slot.courseLabel}の枠を削除しますか？`;
-                                            if (requestsCount > 0) {
-                                              message = `${slot.courseLabel}の枠を削除しますか？\n\n※この枠には${requestsCount}件の申し込みがあります。削除すると申し込みも全て削除されます。`;
-                                            }
-
-                                            if (confirm(message)) {
-                                              deleteSlotMutation.mutate(slot.id);
-                                            }
+                                          onClick={() => {
+                                            confirmAndDeleteSlot(slot);
                                           }}
                                           variant="outline"
                                           size="sm"

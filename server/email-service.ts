@@ -243,8 +243,8 @@ export async function sendAbsenceConfirmationEmail(
     from: fromEmail,
     to: toEmail,
     subject: `[欠席連絡受付] ${absentDate} - ${classBand}`,
-    resumeUrl,
-    cancelUrl
+    hasResumeUrl: !!resumeUrl,
+    hasCancelUrl: !!cancelUrl,
   });
 
   await sendEmailWithRetry(
