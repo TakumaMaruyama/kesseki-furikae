@@ -211,6 +211,7 @@ export async function sendAbsenceConfirmationEmail(
           <li style="margin: 4px 0;"><strong>このリンクは必ず保存してください</strong> - 後から振替予約を行う際に必要です</li>
           <li style="margin: 4px 0;">リンクをブックマークまたはメールを保存しておくことをお勧めします</li>
           <li style="margin: 4px 0;">振替期限: ${makeupDeadline}まで</li>
+          <li style="margin: 4px 0;">欠席連絡はレッスン開始時刻までです。開始後は振替登録できません。</li>
         </ul>
       </div>
 

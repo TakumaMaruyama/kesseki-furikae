@@ -937,7 +937,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const originalSlotStartDateTime = getCanonicalSlotStartDateTime(originalSlot);
       if (originalSlotStartDateTime <= now) {
         return res.status(400).json({
-          error: "レッスン開始時刻を過ぎているため、欠席連絡を登録できません。"
+          error: "レッスン開始時刻までに欠席連絡がないため、振替登録はできません。"
         });
       }
 

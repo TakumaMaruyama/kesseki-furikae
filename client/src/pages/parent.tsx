@@ -419,7 +419,7 @@ export default function ParentPage() {
                     <ul className="text-sm text-yellow-700 space-y-1 list-disc list-inside">
                       <li><strong>確認コードは必ず保存してください</strong> - 予約確認・キャンセルに必要です</li>
                       <li>確認コードが分からなくなった場合は<strong>PICROでメッセージ</strong>をお送りください</li>
-                      <li>欠席連絡は<strong>レッスン開始時間まで</strong>、振替登録は<strong>開始30分前まで</strong>に行ってください</li>
+                      <li><strong>欠席連絡はレッスン開始時刻までです。開始後は振替登録できません。</strong></li>
                     </ul>
                   </div>
                 </CardContent>
@@ -569,6 +569,9 @@ export default function ParentPage() {
                                 この日の{absenceForm.watch("declaredClassBand")}クラスのレッスンはありません
                               </p>
                             )}
+                          <p className="text-xs text-muted-foreground mt-2">
+                            欠席連絡はレッスン開始時刻までです。開始後は振替登録できません。
+                          </p>
                           <FormMessage />
                         </FormItem>
                       )}
@@ -847,6 +850,7 @@ export default function ParentPage() {
                 <li>この確認コードはスクリーンショットやメモで保存してください</li>
                 <li>「予約確認」ページからコードを入力すると予約状況を確認できます</li>
                 <li>メールアドレスを入力した場合は、メールでも確認コードが届きます</li>
+                <li>欠席連絡はレッスン開始時刻までです。開始後は振替登録できません。</li>
               </ul>
             </div>
           </div>
