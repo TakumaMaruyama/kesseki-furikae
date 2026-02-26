@@ -3,6 +3,8 @@ import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+const HIRAGANA_NAME_REGEX = /^[ぁ-ゖー 　]+$/;
+
 // Session storage table for Replit Auth
 export const sessions = pgTable(
   "sessions",
@@ -221,7 +223,11 @@ export const absenceSchema = z.object({
 
 export const createAbsenceRequestSchema = z.object({
   childId: z.string().optional(),
-  childName: z.string().min(1, "お子様の名前を入力してください"),
+  childName: z
+    .string()
+    .trim()
+    .min(1, "お子様の名前を入力してください")
+    .regex(HIRAGANA_NAME_REGEX, "お子様の名前はひらがなで入力してください（空白・ー可）"),
   declaredClassBand: z.enum(["初級", "中級", "上級"], {
     required_error: "クラス帯を選択してください"
   }),

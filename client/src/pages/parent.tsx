@@ -477,7 +477,8 @@ export default function ParentPage() {
                           <FormControl>
                             <Input
                               {...field}
-                              placeholder="例：山田太郎"
+                              placeholder="例：やまだ たろう"
+                              pattern="[ぁ-ゖー 　]+"
                               className="h-12"
                               data-testid="input-child-name"
                             />
