@@ -36,19 +36,9 @@ import { getActualCurrent, getRemainingCapacity, hasRemainingCapacity } from "@s
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
   const sess = req.session as any;
   const isAdmin = sess?.isAdmin === true;
-  const loginTime = sess?.adminLoginTime;
-
-  // Session expires after 24 hours
-  const sessionDuration = 24 * 60 * 60 * 1000;
-  const isExpired = loginTime && (Date.now() - loginTime > sessionDuration);
-
-  if (isAdmin && !isExpired) {
+  if (isAdmin) {
     next();
   } else {
-    if (isExpired) {
-      sess.isAdmin = false;
-      sess.adminLoginTime = null;
-    }
     res.status(401).json({ error: "認証が必要です" });
   }
 }
@@ -310,7 +300,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       cookie: {
         secure: process.env.NODE_ENV === "production",
         httpOnly: true,
-        maxAge: 7 * 24 * 60 * 60 * 1000,
+        maxAge: 10 * 365 * 24 * 60 * 60 * 1000,
       },
     })
   );
@@ -330,7 +320,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (isMatch) {
         (req.session as any).isAdmin = true;
-        (req.session as any).adminLoginTime = Date.now();
         res.json({ success: true });
       } else {
         res.status(401).json({ error: "パスワードが正しくありません" });
@@ -343,19 +332,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/admin/check", (req, res) => {
     const session = req.session as any;
     const isAdmin = session?.isAdmin === true;
-    const loginTime = session?.adminLoginTime;
-
-    // Session expires after 24 hours
-    const sessionDuration = 24 * 60 * 60 * 1000;
-    const isExpired = loginTime && (Date.now() - loginTime > sessionDuration);
-
-    if (isAdmin && !isExpired) {
+    if (isAdmin) {
       res.json({ authenticated: true });
     } else {
-      if (isExpired) {
-        session.isAdmin = false;
-        session.adminLoginTime = null;
-      }
       res.json({ authenticated: false });
     }
   });
@@ -363,7 +342,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/logout", (req, res) => {
     const session = req.session as any;
     session.isAdmin = false;
-    session.adminLoginTime = null;
     res.json({ success: true });
   });
 
