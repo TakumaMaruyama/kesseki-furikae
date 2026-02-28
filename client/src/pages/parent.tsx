@@ -473,7 +473,12 @@ export default function ParentPage() {
                       name="childName"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>お子様の名前</FormLabel>
+                          <FormLabel>
+                            お子様の名前
+                            <span className="ml-1 text-xs font-normal text-muted-foreground">
+                              （ひらがなで入力）
+                            </span>
+                          </FormLabel>
                           <FormControl>
                             <Input
                               {...field}
