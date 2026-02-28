@@ -1,7 +1,7 @@
 import express, { type Express } from "express";
 import fs from "fs";
 import path from "path";
-import { createServer as createViteServer, createLogger } from "vite";
+import { createServer as createViteServer, createLogger, type ConfigEnv, type UserConfig } from "vite";
 import { type Server } from "http";
 import viteConfig from "../vite.config";
 import { nanoid } from "nanoid";
@@ -20,6 +20,15 @@ export function log(message: string, source = "express") {
 }
 
 export async function setupVite(app: Express, server: Server) {
+  const configEnv: ConfigEnv = {
+    command: "serve",
+    mode: app.get("env") === "development" ? "development" : "production",
+  };
+  const resolvedConfig: UserConfig =
+    typeof viteConfig === "function"
+      ? await (viteConfig as (env: ConfigEnv) => UserConfig | Promise<UserConfig>)(configEnv)
+      : (viteConfig as UserConfig);
+
   const serverOptions = {
     middlewareMode: true,
     hmr: { server },
@@ -27,7 +36,7 @@ export async function setupVite(app: Express, server: Server) {
   };
 
   const vite = await createViteServer({
-    ...viteConfig,
+    ...resolvedConfig,
     configFile: false,
     customLogger: {
       ...viteLogger,
