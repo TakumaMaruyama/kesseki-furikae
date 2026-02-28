@@ -85,7 +85,7 @@ export default function LoginPage() {
                     <Input
                       id="displayName"
                       type="text"
-                      placeholder="山田 太郎"
+                      placeholder="やまだ たろう"
                       value={displayName}
                       onChange={(e) => setDisplayName(e.target.value)}
                       className="pl-10"

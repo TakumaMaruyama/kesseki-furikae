@@ -329,14 +329,23 @@ export const cancelRequestSchema = z.object({
 
 // Child management schemas
 export const createChildRequestSchema = z.object({
-  name: z.string().min(1, "お子様の名前を入力してください"),
+  name: z
+    .string()
+    .trim()
+    .min(1, "お子様の名前を入力してください")
+    .regex(HIRAGANA_NAME_REGEX, "お子様の名前はひらがなで入力してください（空白・ー可）"),
   courseId: z.string().optional(),
   classBand: z.enum(["初級", "中級", "上級"]).optional(),
 });
 
 export const updateChildRequestSchema = z.object({
   id: z.string(),
-  name: z.string().min(1, "お子様の名前を入力してください").optional(),
+  name: z
+    .string()
+    .trim()
+    .min(1, "お子様の名前を入力してください")
+    .regex(HIRAGANA_NAME_REGEX, "お子様の名前はひらがなで入力してください（空白・ー可）")
+    .optional(),
   courseId: z.string().nullable().optional(),
   classBand: z.enum(["初級", "中級", "上級"]).nullable().optional(),
 });

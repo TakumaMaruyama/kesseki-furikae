@@ -51,7 +51,8 @@ function ChildForm({
               <FormLabel>お子様の名前 <span className="text-destructive">*</span></FormLabel>
               <FormControl>
                 <Input 
-                  placeholder="例: 山田 太郎" 
+                  placeholder="例：やまだ たろう"
+                  pattern="[ぁ-ゖー 　]+"
                   {...field} 
                   data-testid="input-child-name"
                 />

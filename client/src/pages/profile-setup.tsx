@@ -72,7 +72,7 @@ export default function ProfileSetupPage() {
                     <FormLabel>お名前（保護者名）</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="山田 太郎"
+                        placeholder="やまだ たろう"
                         className="h-12"
                         data-testid="input-display-name"
                         {...field}
