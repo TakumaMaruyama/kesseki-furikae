@@ -48,7 +48,12 @@ function ChildForm({
           name="name"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>お子様の名前 <span className="text-destructive">*</span></FormLabel>
+              <FormLabel>
+                お子様の名前 <span className="text-destructive">*</span>
+                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                  （ひらがなで入力）
+                </span>
+              </FormLabel>
               <FormControl>
                 <Input 
                   placeholder="例：やまだ たろう"
