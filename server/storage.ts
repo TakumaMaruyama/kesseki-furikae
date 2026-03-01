@@ -320,7 +320,10 @@ export class DatabaseStorage implements IStorage {
       startTime: classSlots.startTime,
     })
       .from(classSlots)
-      .where(gte(classSlots.date, scanStart));
+      .where(and(
+        gte(classSlots.date, scanStart),
+        eq(classSlots.isClosed, false),
+      ));
 
     return slots.filter(slot => {
       const canonicalSlotStartDateTime = parseJstDateTime(formatJstDate(slot.date), slot.startTime);

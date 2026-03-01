@@ -2,9 +2,11 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
-import { classSlots, absences, requests } from "@shared/schema";
+import { classSlots, absences, requests, closureEvents, closureEventSlots } from "@shared/schema";
 import { eq, and, gte, lte, lt, asc, inArray, sql } from "drizzle-orm";
 import {
+  createAbsencesBatchRequestSchema,
+  createClosureEventRequestSchema,
   searchSlotsRequestSchema,
   bookRequestSchema,
   updateSlotCapacityRequestSchema,
@@ -14,6 +16,9 @@ import {
   createAbsenceRequestSchema,
   createCourseRequestSchema,
   updateCourseRequestSchema,
+  updateClosureEventSlotsRequestSchema,
+  validateClosureCodeRequestSchema,
+  redeemClosureCodeRequestSchema,
 } from "@shared/schema";
 import { sendConfirmationEmail, sendExpiredEmail, sendAbsenceConfirmationEmail, sendMakeupConfirmationEmail, sendCancellationEmail, sendRequestCancellationEmail } from "./email-service";
 import { createId } from "@paralleldrive/cuid2";
@@ -64,6 +69,174 @@ async function getSlotAbsencesAndMakeups(slotId: string) {
     slot,
     absences: slotAbsences,
     makeupRequests,
+  };
+}
+
+type AbsenceEntryInput = {
+  childId?: string;
+  childName: string;
+  declaredClassBand: "初級" | "中級" | "上級";
+  absentDateISO: string;
+  originalSlotId: string;
+};
+
+type CreateAbsenceInternalOptions = {
+  contactEmail: string | null;
+  reason: string | null;
+  sourceType: "NORMAL" | "CLOSURE_CODE";
+  closureEventId: string | null;
+  enforceBeforeStart: boolean;
+  decrementOriginalSlotCurrent: boolean;
+  makeupDeadlineCap?: Date;
+};
+
+type CreatedAbsenceInternal = {
+  absenceId: string;
+  resumeToken: string;
+  confirmCode: string;
+  makeupDeadline: Date;
+  childName: string;
+  declaredClassBand: "初級" | "中級" | "上級";
+  absentDateISO: string;
+  originalSlot: typeof classSlots.$inferSelect;
+};
+
+class BatchRowError extends Error {
+  rowIndex: number;
+
+  constructor(rowIndex: number, message: string) {
+    super(message);
+    this.name = "BatchRowError";
+    this.rowIndex = rowIndex;
+  }
+}
+
+function normalizeOptionalText(value: string | undefined | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeOptionalEmail(value: string | undefined | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeSharedCode(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function resolveMakeupDeadline(baseDeadline: Date, cap?: Date): Date {
+  if (!cap) {
+    return baseDeadline;
+  }
+  return cap.getTime() < baseDeadline.getTime() ? cap : baseDeadline;
+}
+
+async function syncClosedSlotFlags(tx: any) {
+  const activeRows = await tx
+    .select({ slotId: closureEventSlots.slotId })
+    .from(closureEventSlots)
+    .innerJoin(closureEvents, eq(closureEventSlots.closureEventId, closureEvents.id))
+    .where(eq(closureEvents.isArchived, false));
+
+  const closedSlotIds = Array.from(new Set((activeRows as Array<{ slotId: string }>).map((row) => row.slotId)));
+  const now = new Date();
+
+  await tx
+    .update(classSlots)
+    .set({
+      isClosed: false,
+      updatedAt: now,
+    });
+
+  if (closedSlotIds.length > 0) {
+    await tx
+      .update(classSlots)
+      .set({
+        isClosed: true,
+        updatedAt: now,
+      })
+      .where(inArray(classSlots.id, closedSlotIds));
+  }
+}
+
+async function createAbsenceRecordInTransaction(
+  tx: any,
+  entry: AbsenceEntryInput,
+  options: CreateAbsenceInternalOptions,
+): Promise<CreatedAbsenceInternal> {
+  const absentDate = parseJstDate(entry.absentDateISO);
+  const [originalSlot] = await tx.select().from(classSlots).where(eq(classSlots.id, entry.originalSlotId));
+  if (!originalSlot) {
+    throw new Error("指定されたレッスン枠が見つかりません。");
+  }
+
+  if (options.sourceType === "NORMAL" && originalSlot.isClosed) {
+    throw new Error("休講対象枠のため通常欠席登録できません。休講用の共通コード導線をご利用ください。");
+  }
+
+  const slotDateStr = formatJstDate(originalSlot.date);
+  if (slotDateStr !== entry.absentDateISO) {
+    throw new Error("選択したレッスン枠の日付が欠席日と一致しません。");
+  }
+
+  if (originalSlot.classBand !== entry.declaredClassBand) {
+    throw new Error("選択したレッスン枠のクラス帯が一致しません。");
+  }
+
+  if (options.enforceBeforeStart) {
+    const now = new Date();
+    const originalSlotStartDateTime = getCanonicalSlotStartDateTime(originalSlot);
+    if (originalSlotStartDateTime <= now) {
+      throw new Error("レッスン開始時刻までに欠席連絡がないため、振替登録はできません。");
+    }
+  }
+
+  const settings = await storage.getGlobalSettings();
+  const makeupWindowDays = settings?.makeupWindowDays || 30;
+  const rawMakeupDeadline = addJstDays(absentDate, makeupWindowDays);
+  const makeupDeadline = resolveMakeupDeadline(rawMakeupDeadline, options.makeupDeadlineCap);
+  const resumeToken = createId();
+  const absenceId = createId();
+  const confirmCode = generateConfirmCode();
+
+  await tx.insert(absences).values({
+    id: absenceId,
+    userId: null,
+    childId: entry.childId || null,
+    childName: entry.childName,
+    declaredClassBand: entry.declaredClassBand,
+    absentDate,
+    originalSlotId: entry.originalSlotId,
+    contactEmail: options.contactEmail,
+    reason: options.reason,
+    sourceType: options.sourceType,
+    closureEventId: options.closureEventId,
+    resumeToken,
+    confirmCode,
+    makeupDeadline,
+    makeupStatus: "PENDING",
+  });
+
+  if (options.decrementOriginalSlotCurrent) {
+    await tx
+      .update(classSlots)
+      .set({
+        capacityCurrent: sql`GREATEST(0, ${classSlots.capacityCurrent} - 1)`,
+        updatedAt: new Date(),
+      })
+      .where(eq(classSlots.id, entry.originalSlotId));
+  }
+
+  return {
+    absenceId,
+    resumeToken,
+    confirmCode,
+    makeupDeadline,
+    childName: entry.childName,
+    declaredClassBand: entry.declaredClassBand,
+    absentDateISO: entry.absentDateISO,
+    originalSlot,
   };
 }
 
@@ -674,6 +847,200 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/admin/closure-events", requireAdmin, async (_req, res) => {
+    try {
+      const events = await db
+        .select()
+        .from(closureEvents)
+        .orderBy(asc(closureEvents.isArchived), asc(closureEvents.expiresAt), asc(closureEvents.createdAt));
+
+      if (events.length === 0) {
+        return res.json([]);
+      }
+
+      const eventIds = events.map((event) => event.id);
+      const linkedSlots = await db
+        .select({
+          closureEventId: closureEventSlots.closureEventId,
+          slotId: classSlots.id,
+          date: classSlots.date,
+          startTime: classSlots.startTime,
+          classBand: classSlots.classBand,
+          courseLabel: classSlots.courseLabel,
+          isClosed: classSlots.isClosed,
+        })
+        .from(closureEventSlots)
+        .innerJoin(classSlots, eq(closureEventSlots.slotId, classSlots.id))
+        .where(inArray(closureEventSlots.closureEventId, eventIds))
+        .orderBy(asc(classSlots.date), asc(classSlots.startTime), asc(classSlots.classBand));
+
+      const slotsByEventId = linkedSlots.reduce((acc, slot) => {
+        if (!acc[slot.closureEventId]) {
+          acc[slot.closureEventId] = [];
+        }
+        acc[slot.closureEventId].push(slot);
+        return acc;
+      }, {} as Record<string, typeof linkedSlots>);
+
+      res.json(events.map((event) => ({
+        ...event,
+        usageRemaining: Math.max(0, event.usageLimit - event.usageUsed),
+        slots: (slotsByEventId[event.id] || []).map((slot) => ({
+          ...slot,
+          date: formatJstDate(slot.date),
+        })),
+      })));
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/admin/closure-events", requireAdmin, async (req, res) => {
+    try {
+      const data = createClosureEventRequestSchema.parse(req.body);
+      const normalizedCode = normalizeSharedCode(data.sharedCode);
+      const uniqueSlotIds = Array.from(new Set(data.slotIds));
+      const expiresAt = parseJstDate(data.expiresAtISO);
+
+      const [existingCode] = await db
+        .select({ id: closureEvents.id })
+        .from(closureEvents)
+        .where(eq(closureEvents.sharedCode, normalizedCode));
+
+      if (existingCode) {
+        return res.status(400).json({ error: "同じ共通コードが既に使われています。" });
+      }
+
+      const slots = await db
+        .select({ id: classSlots.id })
+        .from(classSlots)
+        .where(inArray(classSlots.id, uniqueSlotIds));
+
+      if (slots.length !== uniqueSlotIds.length) {
+        return res.status(400).json({ error: "対象枠に存在しないIDが含まれています。" });
+      }
+
+      const created = await db.transaction(async (tx) => {
+        const eventId = createId();
+        const now = new Date();
+        const [event] = await tx
+          .insert(closureEvents)
+          .values({
+            id: eventId,
+            name: data.name.trim(),
+            sharedCode: normalizedCode,
+            usageLimit: data.usageLimit,
+            usageUsed: 0,
+            expiresAt,
+            isArchived: false,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .returning();
+
+        await tx.insert(closureEventSlots).values(
+          uniqueSlotIds.map((slotId) => ({
+            closureEventId: eventId,
+            slotId,
+          })),
+        );
+
+        await tx
+          .update(classSlots)
+          .set({
+            isClosed: true,
+            updatedAt: now,
+          })
+          .where(inArray(classSlots.id, uniqueSlotIds));
+
+        return event;
+      });
+
+      res.json({
+        success: true,
+        event: created,
+      });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/admin/closure-events/:id/close-slots", requireAdmin, async (req, res) => {
+    try {
+      const eventId = req.params.id;
+      const data = updateClosureEventSlotsRequestSchema.parse(req.body);
+      const uniqueSlotIds = Array.from(new Set(data.slotIds));
+
+      const slots = await db
+        .select({ id: classSlots.id })
+        .from(classSlots)
+        .where(inArray(classSlots.id, uniqueSlotIds));
+
+      if (slots.length !== uniqueSlotIds.length) {
+        return res.status(400).json({ error: "対象枠に存在しないIDが含まれています。" });
+      }
+
+      await db.transaction(async (tx) => {
+        const [event] = await tx.select().from(closureEvents).where(eq(closureEvents.id, eventId));
+        if (!event) {
+          throw new Error("CLOSURE_EVENT_NOT_FOUND");
+        }
+
+        await tx.delete(closureEventSlots).where(eq(closureEventSlots.closureEventId, eventId));
+        await tx.insert(closureEventSlots).values(
+          uniqueSlotIds.map((slotId) => ({
+            closureEventId: eventId,
+            slotId,
+          })),
+        );
+
+        await tx
+          .update(closureEvents)
+          .set({ updatedAt: new Date() })
+          .where(eq(closureEvents.id, eventId));
+
+        await syncClosedSlotFlags(tx);
+      });
+
+      res.json({ success: true });
+    } catch (error: any) {
+      if (error.message === "CLOSURE_EVENT_NOT_FOUND") {
+        return res.status(404).json({ error: "休講イベントが見つかりません。" });
+      }
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/admin/closure-events/:id/archive", requireAdmin, async (req, res) => {
+    try {
+      const eventId = req.params.id;
+
+      await db.transaction(async (tx) => {
+        const [event] = await tx.select().from(closureEvents).where(eq(closureEvents.id, eventId));
+        if (!event) {
+          throw new Error("CLOSURE_EVENT_NOT_FOUND");
+        }
+
+        await tx
+          .update(closureEvents)
+          .set({
+            isArchived: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(closureEvents.id, eventId));
+
+        await syncClosedSlotFlags(tx);
+      });
+
+      res.json({ success: true });
+    } catch (error: any) {
+      if (error.message === "CLOSURE_EVENT_NOT_FOUND") {
+        return res.status(404).json({ error: "休講イベントが見つかりません。" });
+      }
+      res.status(400).json({ error: error.message });
+    }
+  });
+
   // Admin: Dashboard stats
   app.get("/api/admin/dashboard-stats", requireAdmin, async (req, res) => {
     try {
@@ -863,11 +1230,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const targetDate = parseJstDate(date);
       const slots = await storage.getClassSlotsByDateAndClassBand(targetDate, classBand);
+      const openSlots = slots.filter((slot) => !slot.isClosed);
 
       const now = new Date();
       res.json({
         success: true,
-        slots: slots.map(slot => {
+        slots: openSlots.map(slot => {
           const canonicalSlotStartDateTime = getCanonicalSlotStartDateTime(slot);
           return {
             id: slot.id,
@@ -885,98 +1253,285 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/absences", async (req, res) => {
+  async function sendAbsenceConfirmationEmails(
+    contactEmail: string | null,
+    createdAbsences: CreatedAbsenceInternal[],
+  ) {
+    if (!contactEmail) {
+      return;
+    }
+
+    for (const created of createdAbsences) {
+      try {
+        await sendAbsenceConfirmationEmail(
+          contactEmail,
+          created.childName,
+          created.declaredClassBand,
+          format(parseJstDate(created.absentDateISO), "yyyy年M月d日"),
+          format(created.makeupDeadline, "yyyy年M月d日"),
+          created.resumeToken,
+          created.absenceId,
+          created.originalSlot.courseLabel,
+          created.originalSlot.startTime,
+          created.confirmCode,
+        );
+      } catch (error: any) {
+        console.error("欠席確認メール送信エラー:", error.message);
+      }
+    }
+  }
+
+  app.post("/api/closure-events/validate-code", async (req, res) => {
     try {
-      const data = createAbsenceRequestSchema.parse(req.body);
-      const absentDate = parseJstDate(data.absentDateISO);
-      const normalizedReason = data.reason?.trim() || null;
-
-      const originalSlot = await storage.getClassSlotById(data.originalSlotId);
-      if (!originalSlot) {
-        return res.status(400).json({
-          error: "指定されたレッスン枠が見つかりません。"
-        });
-      }
-
-      const slotDateStr = formatJstDate(originalSlot.date);
-      if (slotDateStr !== data.absentDateISO) {
-        return res.status(400).json({
-          error: "選択したレッスン枠の日付が欠席日と一致しません。"
-        });
-      }
-
-      if (originalSlot.classBand !== data.declaredClassBand) {
-        return res.status(400).json({
-          error: "選択したレッスン枠のクラス帯が一致しません。"
-        });
-      }
-
-      // Check if lesson time has already passed (fraud prevention)
+      const data = validateClosureCodeRequestSchema.parse(req.body);
+      const sharedCode = normalizeSharedCode(data.sharedCode);
       const now = new Date();
-      const originalSlotStartDateTime = getCanonicalSlotStartDateTime(originalSlot);
-      if (originalSlotStartDateTime <= now) {
+      const [event] = await db
+        .select()
+        .from(closureEvents)
+        .where(and(
+          eq(closureEvents.sharedCode, sharedCode),
+          eq(closureEvents.isArchived, false),
+        ));
+
+      if (!event) {
+        return res.status(400).json({ error: "共通コードが無効です。" });
+      }
+
+      if (endOfJstDay(event.expiresAt) < now) {
+        return res.status(400).json({ error: "この共通コードは有効期限切れです。" });
+      }
+
+      if (event.usageUsed >= event.usageLimit) {
+        return res.status(400).json({ error: "この共通コードの利用上限に達しています。" });
+      }
+
+      const slots = await db
+        .select({
+          id: classSlots.id,
+          date: classSlots.date,
+          startTime: classSlots.startTime,
+          classBand: classSlots.classBand,
+          courseLabel: classSlots.courseLabel,
+          isClosed: classSlots.isClosed,
+        })
+        .from(closureEventSlots)
+        .innerJoin(classSlots, eq(closureEventSlots.slotId, classSlots.id))
+        .where(eq(closureEventSlots.closureEventId, event.id))
+        .orderBy(asc(classSlots.date), asc(classSlots.startTime), asc(classSlots.classBand));
+
+      res.json({
+        id: event.id,
+        name: event.name,
+        sharedCode: event.sharedCode,
+        usageLimit: event.usageLimit,
+        usageUsed: event.usageUsed,
+        usageRemaining: Math.max(0, event.usageLimit - event.usageUsed),
+        expiresAt: formatJstDate(event.expiresAt),
+        slots: slots.map((slot) => ({
+          ...slot,
+          date: formatJstDate(slot.date),
+        })),
+      });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/closure-events/redeem", async (req, res) => {
+    try {
+      const data = redeemClosureCodeRequestSchema.parse(req.body);
+      const sharedCode = normalizeSharedCode(data.sharedCode);
+      const contactEmail = normalizeOptionalEmail(data.contactEmail);
+      const reason = normalizeOptionalText(data.reason);
+      const now = new Date();
+
+      const createdAbsences = await db.transaction(async (tx) => {
+        const [event] = await tx
+          .select()
+          .from(closureEvents)
+          .where(and(
+            eq(closureEvents.sharedCode, sharedCode),
+            eq(closureEvents.isArchived, false),
+          ));
+
+        if (!event) {
+          throw new Error("共通コードが無効です。");
+        }
+
+        if (endOfJstDay(event.expiresAt) < now) {
+          throw new Error("この共通コードは有効期限切れです。");
+        }
+
+        if (event.usageUsed + data.items.length > event.usageLimit) {
+          throw new Error("この共通コードの利用上限を超えるため登録できません。");
+        }
+
+        const eventSlots = await tx
+          .select({ slotId: closureEventSlots.slotId })
+          .from(closureEventSlots)
+          .where(eq(closureEventSlots.closureEventId, event.id));
+        const availableSlotIds = new Set(eventSlots.map((slot: { slotId: string }) => slot.slotId));
+
+        const created: CreatedAbsenceInternal[] = [];
+        for (let index = 0; index < data.items.length; index += 1) {
+          const row = data.items[index];
+          if (!availableSlotIds.has(row.originalSlotId)) {
+            throw new BatchRowError(index, "指定した欠席枠はこの休講イベントの対象外です。");
+          }
+
+          try {
+            const item = await createAbsenceRecordInTransaction(tx, row, {
+              contactEmail,
+              reason,
+              sourceType: "CLOSURE_CODE",
+              closureEventId: event.id,
+              enforceBeforeStart: false,
+              decrementOriginalSlotCurrent: false,
+              makeupDeadlineCap: event.expiresAt,
+            });
+            created.push(item);
+          } catch (error: any) {
+            if (error instanceof BatchRowError) {
+              throw error;
+            }
+            throw new BatchRowError(index, error.message || "登録に失敗しました。");
+          }
+        }
+
+        const [updatedEvent] = await tx
+          .update(closureEvents)
+          .set({
+            usageUsed: sql`${closureEvents.usageUsed} + ${data.items.length}`,
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(closureEvents.id, event.id),
+            sql`${closureEvents.usageUsed} + ${data.items.length} <= ${closureEvents.usageLimit}`,
+          ))
+          .returning();
+
+        if (!updatedEvent) {
+          throw new Error("同時利用により上限を超えたため、もう一度お試しください。");
+        }
+
+        return created;
+      });
+
+      await sendAbsenceConfirmationEmails(contactEmail, createdAbsences);
+
+      res.json({
+        success: true,
+        sourceType: "CLOSURE_CODE",
+        items: createdAbsences.map((item) => ({
+          absenceId: item.absenceId,
+          resumeToken: item.resumeToken,
+          confirmCode: item.confirmCode,
+          makeupDeadline: formatJstDate(item.makeupDeadline),
+          childName: item.childName,
+          declaredClassBand: item.declaredClassBand,
+          absentDateISO: item.absentDateISO,
+        })),
+      });
+    } catch (error: any) {
+      if (error instanceof BatchRowError) {
         return res.status(400).json({
-          error: "レッスン開始時刻までに欠席連絡がないため、振替登録はできません。"
+          error: error.message,
+          rowIndex: error.rowIndex,
         });
       }
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/absences/batch", async (req, res) => {
+    try {
+      const data = createAbsencesBatchRequestSchema.parse(req.body);
+      const contactEmail = normalizeOptionalEmail(data.contactEmail);
+      const reason = normalizeOptionalText(data.reason);
 
       const slotCount = await storage.countFutureSlots();
       if (slotCount === 0) {
         console.warn("⚠️ 振替可能なレッスン枠が登録されていません。欠席登録は受け付けますが、振替予約はできません。");
       }
 
-      const settings = await storage.getGlobalSettings();
-      const makeupWindowDays = settings?.makeupWindowDays || 30;
-
-      const makeupDeadline = addJstDays(absentDate, makeupWindowDays);
-
-      const resumeToken = createId();
-      const absenceId = createId();
-      const confirmCode = generateConfirmCode();
-
-      const absence = await storage.createAbsence({
-        id: absenceId,
-        userId: null,
-        childId: data.childId || null,
-        childName: data.childName,
-        declaredClassBand: data.declaredClassBand,
-        absentDate: absentDate,
-        originalSlotId: data.originalSlotId,
-        contactEmail: data.contactEmail || null,
-        reason: normalizedReason,
-        resumeToken: resumeToken,
-        confirmCode: confirmCode,
-        makeupDeadline: makeupDeadline,
-        makeupStatus: "PENDING",
+      const createdAbsences = await db.transaction(async (tx) => {
+        const created: CreatedAbsenceInternal[] = [];
+        for (let index = 0; index < data.items.length; index += 1) {
+          const row = data.items[index];
+          try {
+            const item = await createAbsenceRecordInTransaction(tx, row, {
+              contactEmail,
+              reason,
+              sourceType: "NORMAL",
+              closureEventId: null,
+              enforceBeforeStart: true,
+              decrementOriginalSlotCurrent: true,
+            });
+            created.push(item);
+          } catch (error: any) {
+            throw new BatchRowError(index, error.message || "登録に失敗しました。");
+          }
+        }
+        return created;
       });
 
-      await storage.decrementClassSlotCurrent(data.originalSlotId);
-
-      if (data.contactEmail) {
-        try {
-          await sendAbsenceConfirmationEmail(
-            data.contactEmail,
-            data.childName,
-            data.declaredClassBand,
-            format(absentDate, "yyyy年M月d日"),
-            format(makeupDeadline, "yyyy年M月d日"),
-            resumeToken,
-            absence.id,
-            originalSlot.courseLabel,
-            originalSlot.startTime,
-            confirmCode
-          );
-        } catch (error: any) {
-          console.error("欠席確認メール送信エラー:", error.message);
-        }
-      }
+      await sendAbsenceConfirmationEmails(contactEmail, createdAbsences);
 
       res.json({
         success: true,
-        absenceId: absence.id,
-        resumeToken: resumeToken,
-        confirmCode: confirmCode,
-        makeupDeadline: formatJstDate(makeupDeadline),
+        items: createdAbsences.map((item) => ({
+          absenceId: item.absenceId,
+          resumeToken: item.resumeToken,
+          confirmCode: item.confirmCode,
+          makeupDeadline: formatJstDate(item.makeupDeadline),
+          childName: item.childName,
+          declaredClassBand: item.declaredClassBand,
+          absentDateISO: item.absentDateISO,
+        })),
+      });
+    } catch (error: any) {
+      if (error instanceof BatchRowError) {
+        return res.status(400).json({
+          error: error.message,
+          rowIndex: error.rowIndex,
+        });
+      }
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/absences", async (req, res) => {
+    try {
+      const data = createAbsenceRequestSchema.parse(req.body);
+      const contactEmail = normalizeOptionalEmail(data.contactEmail);
+      const reason = normalizeOptionalText(data.reason);
+
+      const slotCount = await storage.countFutureSlots();
+      if (slotCount === 0) {
+        console.warn("⚠️ 振替可能なレッスン枠が登録されていません。欠席登録は受け付けますが、振替予約はできません。");
+      }
+
+      const [created] = await db.transaction(async (tx) => {
+        const item = await createAbsenceRecordInTransaction(tx, data, {
+          contactEmail,
+          reason,
+          sourceType: "NORMAL",
+          closureEventId: null,
+          enforceBeforeStart: true,
+          decrementOriginalSlotCurrent: true,
+        });
+        return [item];
+      });
+
+      await sendAbsenceConfirmationEmails(contactEmail, [created]);
+
+      res.json({
+        success: true,
+        absenceId: created.absenceId,
+        resumeToken: created.resumeToken,
+        confirmCode: created.confirmCode,
+        makeupDeadline: formatJstDate(created.makeupDeadline),
       });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -1000,6 +1555,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         originalSlotId: absence.originalSlotId,
         contactEmail: absence.contactEmail,
         reason: absence.reason,
+        sourceType: absence.sourceType,
+        closureEventId: absence.closureEventId,
         makeupDeadline: formatJstDate(absence.makeupDeadline),
         makeupStatus: absence.makeupStatus,
       });
@@ -1071,7 +1628,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const slots = allSlots.filter(slot => {
         const canonicalSlotStartDateTime = getCanonicalSlotStartDateTime(slot);
-        return slot.classBand === data.declaredClassBand && canonicalSlotStartDateTime >= now;
+        return slot.classBand === data.declaredClassBand && !slot.isClosed && canonicalSlotStartDateTime >= now;
       });
 
       const results = slots.map(slot => {
@@ -1128,6 +1685,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         if (slot.classBand !== data.declaredClassBand) {
           throw new Error("BOOK_CLASS_BAND_MISMATCH");
+        }
+
+        if (slot.isClosed) {
+          throw new Error("BOOK_SLOT_CLOSED");
         }
 
         const slotStartDateTime = getCanonicalSlotStartDateTime(slot);
@@ -1268,6 +1829,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       if (error.message === "BOOK_SLOT_FULL") {
         return res.status(400).json({ success: false, message: "この枠は満席のため予約できません。" });
+      }
+      if (error.message === "BOOK_SLOT_CLOSED") {
+        return res.status(400).json({ success: false, message: "この枠は休講のため予約できません。" });
       }
       if (error.message === "BOOK_DUPLICATE_CHILD") {
         return res.status(400).json({

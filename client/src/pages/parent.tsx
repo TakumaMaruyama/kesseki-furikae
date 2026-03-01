@@ -1,10 +1,15 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
-import { useForm } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { searchSlotsRequestSchema, createAbsenceRequestSchema, type SearchSlotsRequest, type SlotSearchResult, type CreateAbsenceRequest } from "@shared/schema";
+import {
+  createAbsencesBatchRequestSchema,
+  type CreateAbsencesBatchRequest,
+  type SearchSlotsRequest,
+  type SlotSearchResult,
+} from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,12 +17,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
 import { Badge } from "@/components/ui/badge";
 import {
-  CalendarIcon, UserIcon, CheckCircleIcon, AlertTriangleIcon, ClockIcon,
-  ListIcon, InfoIcon, XCircleIcon, ChevronDownIcon, CopyIcon
+  CalendarIcon, CheckCircleIcon, AlertTriangleIcon, ClockIcon,
+  ListIcon, InfoIcon, XCircleIcon, ChevronDownIcon, CopyIcon, PlusIcon, Trash2Icon
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Link } from "wouter";
 import { Calendar } from "@/components/ui/calendar";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -27,16 +31,52 @@ import { getActualCurrent, getRemainingCapacity } from "@shared/capacity";
 type AbsenceData = {
   id: string;
   childName: string;
-  declaredClassBand: string;
+  declaredClassBand: "初級" | "中級" | "上級";
   absentDate: string;
   originalSlotId?: string;
   contactEmail: string | null;
   reason?: string | null;
+  sourceType?: "NORMAL" | "CLOSURE_CODE";
+  closureEventId?: string | null;
   makeupDeadline: string;
   makeupStatus: string;
   resumeToken?: string;
   confirmCode?: string;
 };
+
+type ClassSlotOption = {
+  id: string;
+  date: string;
+  startTime: string;
+  courseLabel: string;
+  classBand: "初級" | "中級" | "上級";
+  lessonStartDateTime?: string;
+  isPastLesson?: boolean;
+  isClosed?: boolean;
+};
+
+type BatchResultItem = {
+  absenceId: string;
+  resumeToken: string;
+  confirmCode: string;
+  makeupDeadline: string;
+  childName: string;
+  declaredClassBand: "初級" | "中級" | "上級";
+  absentDateISO: string;
+};
+
+type ClosureValidationResult = {
+  id: string;
+  name: string;
+  sharedCode: string;
+  usageLimit: number;
+  usageUsed: number;
+  usageRemaining: number;
+  expiresAt: string;
+  slots: ClassSlotOption[];
+};
+
+const CLASS_BANDS: Array<"初級" | "中級" | "上級"> = ["初級", "中級", "上級"];
 
 // Helper to safely parse date string to local Date object avoiding timezone shifts
 const parseLocalDate = (dateStr: any) => {
@@ -50,6 +90,31 @@ const parseLocalDate = (dateStr: any) => {
   const [year, month, day] = datePart.split('-').map(Number);
   return new Date(year, month - 1, day);
 };
+
+async function postJsonWithDetails(url: string, data: unknown): Promise<any> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+    credentials: "include",
+  });
+
+  const bodyText = await response.text();
+  const parsed = bodyText ? JSON.parse(bodyText) : {};
+  if (!response.ok) {
+    const error: any = new Error(parsed?.error || parsed?.message || "リクエストに失敗しました");
+    if (typeof parsed?.rowIndex === "number") {
+      error.rowIndex = parsed.rowIndex;
+    }
+    throw error;
+  }
+
+  return parsed;
+}
+
+function buildResumeUrl(token: string): string {
+  return `${window.location.origin}/?token=${token}`;
+}
 
 export default function ParentPage() {
   const token = useMemo(() => {
@@ -65,147 +130,138 @@ export default function ParentPage() {
   });
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [showConfirmCodeDialog, setShowConfirmCodeDialog] = useState(false);
-  const [confirmCode, setConfirmCode] = useState<string | null>(null);
-  const [availableSlotsForAbsence, setAvailableSlotsForAbsence] = useState<any[]>([]);
-  const [slotsLoaded, setSlotsLoaded] = useState(false);
-  const classSlotsFetchSeqRef = useRef(0);
+  const [confirmItems, setConfirmItems] = useState<BatchResultItem[]>([]);
+  const [optionalOpen, setOptionalOpen] = useState(false);
+  const [slotOptionsByKey, setSlotOptionsByKey] = useState<Record<string, ClassSlotOption[]>>({});
+  const [loadingSlotKeys, setLoadingSlotKeys] = useState<Set<string>>(new Set());
+  const [closureCode, setClosureCode] = useState("");
+  const [closureValidation, setClosureValidation] = useState<ClosureValidationResult | null>(null);
+  const [isValidatingClosureCode, setIsValidatingClosureCode] = useState(false);
+  const isClosureMode = !!closureValidation;
   const isAbsenceCancelled = (status: string) => status === "CANCELLED" || status === "EXPIRED";
-
-  const setOriginalSlotIdValue = (
-    slotId: string,
-    options?: { shouldDirty?: boolean; shouldTouch?: boolean; shouldValidate?: boolean }
-  ) => {
-    const shouldValidate = options?.shouldValidate ?? false;
-    absenceForm.setValue("originalSlotId", slotId, {
-      shouldValidate,
-      shouldDirty: options?.shouldDirty ?? false,
-      shouldTouch: options?.shouldTouch ?? false,
-    });
-
-    if (slotId) {
-      absenceForm.clearErrors("originalSlotId");
-    }
-
-    if (shouldValidate) {
-      void absenceForm.trigger("originalSlotId");
-    }
-  };
 
   const isMakeupDeadlineOpen = (deadlineISO: string) => {
     const deadlineEndExclusive = addJstDays(parseJstDate(deadlineISO), 1);
     return deadlineEndExclusive > new Date();
   };
 
-  const absenceForm = useForm<CreateAbsenceRequest>({
-    resolver: zodResolver(createAbsenceRequestSchema),
+  const absenceForm = useForm<CreateAbsencesBatchRequest>({
+    resolver: zodResolver(createAbsencesBatchRequestSchema),
     defaultValues: {
-      childName: "",
-      declaredClassBand: undefined,
-      absentDateISO: "",
-      originalSlotId: "",
+      items: [{
+        childName: "",
+        declaredClassBand: undefined,
+        absentDateISO: "",
+        originalSlotId: "",
+      }],
       contactEmail: "",
       reason: "",
     },
     mode: "onChange",
   });
 
-  const searchForm = useForm<any>({
-    resolver: zodResolver(searchSlotsRequestSchema),
-    defaultValues: {
-      childName: "",
-      declaredClassBand: undefined,
-      absentDateISO: "",
-    },
-    mode: "onChange",
+  const { fields, append, remove } = useFieldArray({
+    control: absenceForm.control,
+    name: "items",
   });
+  const watchedItems = absenceForm.watch("items");
+
+  const getSlotCacheKey = (absentDateISO?: string, declaredClassBand?: string) => {
+    if (!absentDateISO || !declaredClassBand) return "";
+    return `${absentDateISO}__${declaredClassBand}`;
+  };
+
+  const ensureNormalSlotOptions = async (absentDateISO: string, declaredClassBand: "初級" | "中級" | "上級") => {
+    const key = getSlotCacheKey(absentDateISO, declaredClassBand);
+    if (!key) return [] as ClassSlotOption[];
+    if (slotOptionsByKey[key]) return slotOptionsByKey[key];
+    if (loadingSlotKeys.has(key)) return [] as ClassSlotOption[];
+
+    setLoadingSlotKeys((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+
+    try {
+      const response = await apiRequest("GET", `/api/class-slots?date=${absentDateISO}&classBand=${declaredClassBand}`);
+      const slots = (response?.slots || []) as ClassSlotOption[];
+      setSlotOptionsByKey((prev) => ({ ...prev, [key]: slots }));
+      return slots;
+    } catch {
+      setSlotOptionsByKey((prev) => ({ ...prev, [key]: [] }));
+      return [] as ClassSlotOption[];
+    } finally {
+      setLoadingSlotKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
+  const getClosureRowSlotOptions = (row: CreateAbsencesBatchRequest["items"][number] | undefined) => {
+    if (!closureValidation) return [] as ClassSlotOption[];
+    if (!row) return closureValidation.slots;
+
+    const hasDate = !!row.absentDateISO;
+    const hasBand = !!row.declaredClassBand;
+
+    if (hasDate && hasBand) {
+      return closureValidation.slots.filter(
+        (slot) => slot.date === row.absentDateISO && slot.classBand === row.declaredClassBand,
+      );
+    }
+    if (hasDate) {
+      return closureValidation.slots.filter((slot) => slot.date === row.absentDateISO);
+    }
+    if (hasBand) {
+      return closureValidation.slots.filter((slot) => slot.classBand === row.declaredClassBand);
+    }
+
+    return closureValidation.slots;
+  };
+
+  const activateSearchFromAbsence = (data: {
+    id: string;
+    childName: string;
+    declaredClassBand: "初級" | "中級" | "上級";
+    absentDate: string;
+  }) => {
+    setSearchParams2({
+      childName: data.childName,
+      declaredClassBand: data.declaredClassBand,
+      absentDateISO: data.absentDate,
+      absenceId: data.id,
+    });
+    setSelectedDate(parseJstDate(data.absentDate));
+    setViewMode("calendar");
+  };
 
   // LocalStorageから保存された値を読み込み
   useEffect(() => {
     if (!token) {
       const savedName = localStorage.getItem("hamasui_childName");
-      const savedClass = localStorage.getItem("hamasui_classBand");
-      if (savedName) absenceForm.setValue("childName", savedName);
-      if (savedClass) absenceForm.setValue("declaredClassBand", savedClass as any);
+      const savedClass = localStorage.getItem("hamasui_classBand") as "初級" | "中級" | "上級" | null;
+      if (savedName) absenceForm.setValue("items.0.childName", savedName);
+      if (savedClass) absenceForm.setValue("items.0.declaredClassBand", savedClass);
     }
-  }, [token]);
-
-  useEffect(() => {
-    const subscription = absenceForm.watch((value, { name }) => {
-      if ((name === "absentDateISO" || name === "declaredClassBand") &&
-        value.absentDateISO && value.declaredClassBand) {
-        const fetchSeq = ++classSlotsFetchSeqRef.current;
-        setSlotsLoaded(false);
-        apiRequest("GET", `/api/class-slots?date=${value.absentDateISO}&classBand=${value.declaredClassBand}`)
-          .then((response: any) => {
-            if (fetchSeq !== classSlotsFetchSeqRef.current) return;
-
-            const slots = response.slots || [];
-            const validSlots = slots.filter((s: any) => !s.isPastLesson);
-            setAvailableSlotsForAbsence(slots);
-            setSlotsLoaded(true);
-
-            const currentSlotId = absenceForm.getValues("originalSlotId");
-            const currentSelectionIsStillValid = !!currentSlotId && validSlots.some((s: any) => s.id === currentSlotId);
-            if (currentSelectionIsStillValid) {
-              setOriginalSlotIdValue(currentSlotId);
-              return;
-            }
-
-            // 1つしかない場合は自動選択
-            if (validSlots.length === 1) {
-              setOriginalSlotIdValue(validSlots[0].id);
-            } else {
-              setOriginalSlotIdValue("");
-            }
-          })
-          .catch(() => {
-            if (fetchSeq !== classSlotsFetchSeqRef.current) return;
-
-            setAvailableSlotsForAbsence([]);
-            setSlotsLoaded(true);
-            setOriginalSlotIdValue("");
-          });
-      }
-    });
-    return () => subscription.unsubscribe();
-  }, [absenceForm]);
-
-  const fetchSlots = async (childName: string, declaredClassBand: string, absentDate: string) => {
-    try {
-      const response: any = await apiRequest("GET", `/api/class-slots?date=${absentDate}&classBand=${declaredClassBand}`);
-      setAvailableSlotsForAbsence(response.slots || []);
-      setSearchParams2({
-        childName: childName,
-        declaredClassBand: declaredClassBand as "初級" | "中級" | "上級",
-        absentDateISO: absentDate,
-        absenceId: absenceData?.id,
-      });
-      if (absentDate) {
-        setSelectedDate(parseJstDate(absentDate));
-      }
-      setViewMode("calendar");
-    } catch (error) {
-      setAvailableSlotsForAbsence([]);
-      setSearchParams2(null);
-      toast({
-        title: "エラー",
-        description: "振替枠の検索に失敗しました",
-        variant: "destructive",
-      });
-    }
-  };
+  }, [token, absenceForm]);
 
   useEffect(() => {
     if (token) {
       apiRequest("GET", `/api/absences/${token}`)
         .then((data: AbsenceData) => {
-          setAbsenceData({ ...data, resumeToken: token });
-          searchForm.setValue("childName", data.childName);
-          searchForm.setValue("declaredClassBand", data.declaredClassBand);
-          searchForm.setValue("absentDateISO", data.absentDate);
+          const typedClassBand = data.declaredClassBand as "初級" | "中級" | "上級";
+          setAbsenceData({ ...data, declaredClassBand: typedClassBand, resumeToken: token });
 
           if (data.makeupStatus === "PENDING") {
-            fetchSlots(data.childName, data.declaredClassBand, data.absentDate);
+            activateSearchFromAbsence({
+              id: data.id,
+              childName: data.childName,
+              declaredClassBand: typedClassBand,
+              absentDate: data.absentDate,
+            });
           }
         })
         .catch(() => {
@@ -218,7 +274,7 @@ export default function ParentPage() {
     }
   }, [token]);
 
-  const { data: slots, isLoading, error } = useQuery<SlotSearchResult[]>({
+  const { data: slots, isLoading } = useQuery<SlotSearchResult[]>({
     queryKey: ["/api/search-slots", searchParams2],
     enabled: !!searchParams2,
     queryFn: async () => {
@@ -227,58 +283,188 @@ export default function ParentPage() {
     },
   });
 
-  const handleAbsenceSuccess = (
-    childName: string,
-    declaredClassBand: string,
-    absentDate: string,
-    contactEmail: string | undefined,
-    reason: string | undefined,
-    result: { absenceId: string; resumeToken: string; makeupDeadline: string; confirmCode?: string }
-  ) => {
-    setAbsenceData({
-      id: result.absenceId,
-      childName,
-      declaredClassBand,
-      absentDate,
-      contactEmail: contactEmail || null,
-      reason: reason?.trim() ? reason.trim() : null,
-      makeupDeadline: result.makeupDeadline,
-      makeupStatus: "PENDING",
-      resumeToken: result.resumeToken,
-      confirmCode: result.confirmCode,
-    });
-
-    if (result.confirmCode) {
-      setConfirmCode(result.confirmCode);
-      setShowConfirmCodeDialog(true);
+  const handleValidateClosureCode = async () => {
+    if (!closureCode.trim()) {
+      toast({
+        title: "入力エラー",
+        description: "共通コードを入力してください。",
+        variant: "destructive",
+      });
+      return;
     }
 
-    fetchSlots(childName, declaredClassBand, absentDate);
-  };
-
-  const onAbsenceSubmit = async (data: CreateAbsenceRequest) => {
+    setIsValidatingClosureCode(true);
     try {
-      const slotsCheck = await apiRequest("GET", "/api/check-slots-availability");
-      if (!slotsCheck.hasSlots) {
-        toast({
-          title: "レッスン枠が登録されていません",
-          description: "現在、振替可能なレッスン枠が登録されていないため、欠席登録はできません。事務局にお問い合わせください。",
-          variant: "destructive",
-        });
-        return;
+      const result = await apiRequest("POST", "/api/closure-events/validate-code", { sharedCode: closureCode }) as ClosureValidationResult;
+      setClosureValidation(result);
+      setClosureCode(result.sharedCode);
+
+      const firstSlot = result.slots[0];
+      if (firstSlot) {
+        absenceForm.setValue("items.0.absentDateISO", firstSlot.date);
+        absenceForm.setValue("items.0.declaredClassBand", firstSlot.classBand);
+        absenceForm.setValue("items.0.originalSlotId", firstSlot.id);
       }
 
-      const result: any = await apiRequest("POST", "/api/absences", data);
-
-      // LocalStorageに保存
-      localStorage.setItem("hamasui_childName", data.childName);
-      localStorage.setItem("hamasui_classBand", data.declaredClassBand);
-
-      toast({ title: "欠席連絡を受け付けました", description: "振替枠を自動的に検索します" });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/daily-lessons"] });
-      handleAbsenceSuccess(data.childName, data.declaredClassBand, data.absentDateISO, data.contactEmail, data.reason, result);
+      toast({
+        title: "休講コードを確認しました",
+        description: "このコードで振替権を登録できます。",
+      });
     } catch (error: any) {
-      toast({ title: "エラー", description: error.message || "欠席連絡の登録に失敗しました", variant: "destructive" });
+      setClosureValidation(null);
+      toast({
+        title: "コード確認エラー",
+        description: error.message || "共通コードの検証に失敗しました。",
+        variant: "destructive",
+      });
+    } finally {
+      setIsValidatingClosureCode(false);
+    }
+  };
+
+  const clearClosureMode = () => {
+    setClosureValidation(null);
+    setClosureCode("");
+  };
+
+  const handleAddRow = async () => {
+    if (fields.length >= 5) {
+      toast({
+        title: "追加できません",
+        description: "一度に登録できるのは5名までです。",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const firstRow = absenceForm.getValues("items.0");
+    append({
+      childName: "",
+      declaredClassBand: firstRow?.declaredClassBand,
+      absentDateISO: firstRow?.absentDateISO || "",
+      originalSlotId: firstRow?.originalSlotId || "",
+    });
+
+    if (!isClosureMode && firstRow?.absentDateISO && firstRow?.declaredClassBand) {
+      await ensureNormalSlotOptions(firstRow.absentDateISO, firstRow.declaredClassBand);
+    }
+  };
+
+  const handleRemoveRow = (index: number) => {
+    if (fields.length <= 1) return;
+    remove(index);
+  };
+
+  const handleRowClassBandChange = async (index: number, classBand: "初級" | "中級" | "上級") => {
+    const currentDate = absenceForm.getValues(`items.${index}.absentDateISO` as const);
+
+    absenceForm.setValue(`items.${index}.declaredClassBand` as const, classBand, { shouldDirty: true, shouldValidate: true });
+    absenceForm.setValue(`items.${index}.originalSlotId` as const, "", { shouldDirty: true, shouldValidate: true });
+
+    if (!isClosureMode && currentDate) {
+      const slots = await ensureNormalSlotOptions(currentDate, classBand);
+      const validSlots = slots.filter((slot) => !slot.isPastLesson);
+      if (validSlots.length === 1) {
+        absenceForm.setValue(`items.${index}.originalSlotId` as const, validSlots[0].id, { shouldDirty: true, shouldValidate: true });
+      }
+    }
+  };
+
+  const handleRowDateChange = async (index: number, absentDateISO: string) => {
+    const classBand = absenceForm.getValues(`items.${index}.declaredClassBand` as const);
+
+    absenceForm.setValue(`items.${index}.absentDateISO` as const, absentDateISO, { shouldDirty: true, shouldValidate: true });
+    absenceForm.setValue(`items.${index}.originalSlotId` as const, "", { shouldDirty: true, shouldValidate: true });
+
+    if (!isClosureMode && classBand) {
+      const slots = await ensureNormalSlotOptions(absentDateISO, classBand);
+      const validSlots = slots.filter((slot) => !slot.isPastLesson);
+      if (validSlots.length === 1) {
+        absenceForm.setValue(`items.${index}.originalSlotId` as const, validSlots[0].id, { shouldDirty: true, shouldValidate: true });
+      }
+    }
+  };
+
+  const handleRowOriginalSlotChange = (index: number, slotId: string) => {
+    absenceForm.setValue(`items.${index}.originalSlotId` as const, slotId, { shouldDirty: true, shouldValidate: true });
+
+    if (!closureValidation) return;
+    const matchedSlot = closureValidation.slots.find((slot) => slot.id === slotId);
+    if (!matchedSlot) return;
+
+    absenceForm.setValue(`items.${index}.absentDateISO` as const, matchedSlot.date, { shouldDirty: true, shouldValidate: true });
+    absenceForm.setValue(`items.${index}.declaredClassBand` as const, matchedSlot.classBand, { shouldDirty: true, shouldValidate: true });
+  };
+
+  const onAbsenceSubmit = async (data: CreateAbsencesBatchRequest) => {
+    try {
+      if (!isClosureMode) {
+        const slotsCheck = await apiRequest("GET", "/api/check-slots-availability");
+        if (!slotsCheck.hasSlots) {
+          toast({
+            title: "レッスン枠が登録されていません",
+            description: "現在、振替可能なレッスン枠が登録されていないため、欠席登録はできません。事務局にお問い合わせください。",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+
+      const endpoint = isClosureMode ? "/api/closure-events/redeem" : "/api/absences/batch";
+      const payload = isClosureMode ? { ...data, sharedCode: closureValidation?.sharedCode } : data;
+      const result = await postJsonWithDetails(endpoint, payload);
+      const items = (result?.items || []) as BatchResultItem[];
+
+      if (items.length === 0) {
+        throw new Error("欠席登録結果を取得できませんでした。");
+      }
+
+      const firstFormRow = data.items[0];
+      if (firstFormRow) {
+        localStorage.setItem("hamasui_childName", firstFormRow.childName);
+        localStorage.setItem("hamasui_classBand", firstFormRow.declaredClassBand);
+      }
+
+      const firstItem = items[0];
+      setConfirmItems(items);
+      setShowConfirmCodeDialog(true);
+
+      const firstAbsence: AbsenceData = {
+        id: firstItem.absenceId,
+        childName: firstItem.childName,
+        declaredClassBand: firstItem.declaredClassBand,
+        absentDate: firstItem.absentDateISO,
+        originalSlotId: firstFormRow?.originalSlotId,
+        contactEmail: data.contactEmail?.trim() ? data.contactEmail.trim() : null,
+        reason: data.reason?.trim() ? data.reason.trim() : null,
+        makeupDeadline: firstItem.makeupDeadline,
+        makeupStatus: "PENDING",
+        sourceType: isClosureMode ? "CLOSURE_CODE" : "NORMAL",
+        closureEventId: isClosureMode ? closureValidation?.id || null : null,
+        resumeToken: firstItem.resumeToken,
+        confirmCode: firstItem.confirmCode,
+      };
+
+      setAbsenceData(firstAbsence);
+      activateSearchFromAbsence({
+        id: firstAbsence.id,
+        childName: firstAbsence.childName,
+        declaredClassBand: firstAbsence.declaredClassBand,
+        absentDate: firstAbsence.absentDate,
+      });
+
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/daily-lessons"] });
+      toast({
+        title: "欠席連絡を受け付けました",
+        description: "確認コード一覧を表示しています。",
+      });
+    } catch (error: any) {
+      const rowSuffix = typeof error?.rowIndex === "number" ? `（${error.rowIndex + 1}行目）` : "";
+      toast({
+        title: "エラー",
+        description: `${error.message || "欠席連絡の登録に失敗しました"}${rowSuffix}`,
+        variant: "destructive",
+      });
     }
   };
 
@@ -360,12 +546,18 @@ export default function ParentPage() {
     }
   };
 
-  const copyConfirmCode = () => {
-    if (confirmCode) {
-      navigator.clipboard.writeText(confirmCode);
+  const copyText = async (value: string, successMessage: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
       toast({
         title: "コピーしました",
-        description: "確認コードをクリップボードにコピーしました。",
+        description: successMessage,
+      });
+    } catch {
+      toast({
+        title: "コピー失敗",
+        description: "クリップボードへのコピーに失敗しました。",
+        variant: "destructive",
       });
     }
   };
@@ -469,183 +661,299 @@ export default function ParentPage() {
             </Card>
           ) : (
             <Card className="border-2">
-              <CardContent className="p-4 sm:p-6">
+              <CardContent className="p-4 sm:p-6 space-y-6">
+                {!token && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-amber-900">
+                      <AlertTriangleIcon className="w-4 h-4" />
+                      <p className="font-semibold text-sm">臨時休講等による振替が必要な場合</p>
+                    </div>
+
+                    {!closureValidation ? (
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <Input
+                          value={closureCode}
+                          onChange={(event) => setClosureCode(event.target.value)}
+                          placeholder="共通コードを入力"
+                          className="h-10"
+                          data-testid="input-closure-code"
+                        />
+                        <Button
+                          type="button"
+                          onClick={handleValidateClosureCode}
+                          disabled={isValidatingClosureCode}
+                          className="sm:w-40"
+                          data-testid="button-validate-closure-code"
+                        >
+                          {isValidatingClosureCode ? "確認中..." : "コード確認"}
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2 text-sm">
+                        <p>
+                          <span className="font-semibold">イベント:</span> {closureValidation.name}
+                        </p>
+                        <p>
+                          <span className="font-semibold">残り利用回数:</span> {closureValidation.usageRemaining} / {closureValidation.usageLimit}
+                        </p>
+                        <p>
+                          <span className="font-semibold">有効期限:</span> {closureValidation.expiresAt}
+                        </p>
+                        <div className="flex gap-2 pt-1">
+                          <Badge variant="secondary">休講コード適用中</Badge>
+                          <Button type="button" variant="outline" size="sm" onClick={clearClosureMode} data-testid="button-clear-closure-mode">
+                            通常欠席に戻す
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <Form {...absenceForm}>
                   <form onSubmit={absenceForm.handleSubmit(onAbsenceSubmit)} className="space-y-6">
-                    <FormField
-                      control={absenceForm.control}
-                      name="childName"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>
-                            お子様の名前
-                            <span className="ml-1 text-xs font-normal text-muted-foreground">
-                              （ひらがなで入力）
-                            </span>
-                          </FormLabel>
-                          <FormControl>
-                            <Input
-                              {...field}
-                              placeholder="例：やまだ たろう"
-                              pattern="[ぁ-ゖー 　]+"
-                              className="h-12"
-                              data-testid="input-child-name"
+                    <div className="space-y-3">
+                      {fields.map((field, index) => {
+                        const row = watchedItems?.[index];
+                        const rowKey = getSlotCacheKey(row?.absentDateISO, row?.declaredClassBand);
+                        const isLoadingRowSlots = rowKey ? loadingSlotKeys.has(rowKey) : false;
+                        const rowSlotOptions = isClosureMode
+                          ? getClosureRowSlotOptions(row)
+                          : (rowKey ? (slotOptionsByKey[rowKey] || []) : []);
+                        const selectableOptions = isClosureMode
+                          ? rowSlotOptions
+                          : rowSlotOptions.filter((slot) => !slot.isPastLesson);
+
+                        return (
+                          <div key={field.id} className="border rounded-lg p-4 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <p className="text-sm font-semibold text-muted-foreground">お子様 {index + 1}</p>
+                              {fields.length > 1 && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleRemoveRow(index)}
+                                  data-testid={`button-remove-row-${index}`}
+                                >
+                                  <Trash2Icon className="w-4 h-4 mr-1" />
+                                  行を削除
+                                </Button>
+                              )}
+                            </div>
+
+                            <FormField
+                              control={absenceForm.control}
+                              name={`items.${index}.childName` as const}
+                              render={({ field: itemField }) => (
+                                <FormItem>
+                                  <FormLabel>
+                                    お子様の名前
+                                    <span className="ml-1 text-xs font-normal text-muted-foreground">（ひらがなで入力）</span>
+                                  </FormLabel>
+                                  <FormControl>
+                                    <Input
+                                      {...itemField}
+                                      placeholder="例：やまだ たろう"
+                                      pattern="[ぁ-ゖー 　]+"
+                                      className="h-12"
+                                      data-testid={`input-child-name-${index}`}
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
                             />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
 
-                    <FormField
-                      control={absenceForm.control}
-                      name="declaredClassBand"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>クラス帯</FormLabel>
-                          <Select onValueChange={field.onChange} value={field.value}>
-                            <FormControl>
-                              <SelectTrigger className="h-12" data-testid="select-class-band">
-                                <SelectValue placeholder="クラス帯を選択" />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              <SelectItem value="初級">初級</SelectItem>
-                              <SelectItem value="中級">中級</SelectItem>
-                              <SelectItem value="上級">上級</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <FormField
+                                control={absenceForm.control}
+                                name={`items.${index}.declaredClassBand` as const}
+                                render={({ field: itemField }) => (
+                                  <FormItem>
+                                    <FormLabel>クラス帯</FormLabel>
+                                    <Select
+                                      value={itemField.value}
+                                      onValueChange={(value) => handleRowClassBandChange(index, value as "初級" | "中級" | "上級")}
+                                    >
+                                      <FormControl>
+                                        <SelectTrigger className="h-12" data-testid={`select-class-band-${index}`}>
+                                          <SelectValue placeholder="クラス帯を選択" />
+                                        </SelectTrigger>
+                                      </FormControl>
+                                      <SelectContent>
+                                        {CLASS_BANDS.map((band) => (
+                                          <SelectItem key={band} value={band}>
+                                            {band}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
 
-                    <FormField
-                      control={absenceForm.control}
-                      name="absentDateISO"
-                      render={({ field }) => (
-                        <FormItem className="w-full min-w-0">
-                          <FormLabel>欠席予定日</FormLabel>
-                          <FormControl>
-                            <div className="relative w-full min-w-0 rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
-                              <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground pointer-events-none" />
-                              <Input
-                                type="date"
-                                {...field}
-                                className="absence-date-input h-12 w-full min-w-0 max-w-full border-0 bg-transparent pl-10 pr-2 text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
-                                data-testid="input-absent-date"
+                              <FormField
+                                control={absenceForm.control}
+                                name={`items.${index}.absentDateISO` as const}
+                                render={({ field: itemField }) => (
+                                  <FormItem className="w-full min-w-0">
+                                    <FormLabel>欠席予定日</FormLabel>
+                                    <FormControl>
+                                      <div className="relative w-full min-w-0 rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
+                                        <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground pointer-events-none" />
+                                        <Input
+                                          type="date"
+                                          value={itemField.value || ""}
+                                          onChange={(event) => handleRowDateChange(index, event.target.value)}
+                                          className="absence-date-input h-12 w-full min-w-0 max-w-full border-0 bg-transparent pl-10 pr-2 text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
+                                          data-testid={`input-absent-date-${index}`}
+                                        />
+                                      </div>
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
                               />
                             </div>
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
 
-                    <FormField
-                      control={absenceForm.control}
-                      name="originalSlotId"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>欠席するレッスン枠</FormLabel>
-                          <Select
-                            onValueChange={(selectedSlotId) => {
-                              setOriginalSlotIdValue(selectedSlotId, {
-                                shouldDirty: true,
-                                shouldTouch: true,
-                                shouldValidate: true,
-                              });
-                            }}
-                            value={field.value || undefined}
-                            disabled={availableSlotsForAbsence.length === 0}
-                          >
-                            <FormControl>
-                              <SelectTrigger className="h-12" data-testid="select-original-slot">
-                                <SelectValue placeholder={availableSlotsForAbsence.length === 0 ? "日付とクラス帯を選択してください" : "レッスン枠を選択"} />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {availableSlotsForAbsence.filter(s => !s.isPastLesson).map((slot) => (
-                                <SelectItem key={slot.id} value={slot.id}>
-                                  {slot.startTime} - {slot.courseLabel}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          {slotsLoaded && availableSlotsForAbsence.filter(s => !s.isPastLesson).length === 0 &&
-                            absenceForm.watch("absentDateISO") &&
-                            absenceForm.watch("declaredClassBand") && (
-                              <p className="text-sm text-destructive mt-1">
-                                この日の{absenceForm.watch("declaredClassBand")}クラスのレッスンはありません
+                            <FormField
+                              control={absenceForm.control}
+                              name={`items.${index}.originalSlotId` as const}
+                              render={({ field: itemField }) => (
+                                <FormItem>
+                                  <FormLabel>欠席するレッスン枠</FormLabel>
+                                  <Select
+                                    value={itemField.value || ""}
+                                    onValueChange={(value) => handleRowOriginalSlotChange(index, value)}
+                                    disabled={!row?.absentDateISO || !row?.declaredClassBand}
+                                  >
+                                    <FormControl>
+                                      <SelectTrigger className="h-12" data-testid={`select-original-slot-${index}`}>
+                                        <SelectValue placeholder={
+                                          !row?.absentDateISO || !row?.declaredClassBand
+                                            ? "先に欠席日とクラス帯を選択"
+                                            : "レッスン枠を選択"
+                                        } />
+                                      </SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent>
+                                      {selectableOptions.map((slot) => (
+                                        <SelectItem key={slot.id} value={slot.id}>
+                                          {slot.date} {slot.startTime} - {slot.courseLabel}（{slot.classBand}）
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  {!isClosureMode && isLoadingRowSlots && (
+                                    <p className="text-xs text-muted-foreground mt-1">レッスン枠を読み込み中です...</p>
+                                  )}
+                                  {!isClosureMode &&
+                                    !isLoadingRowSlots &&
+                                    row?.absentDateISO &&
+                                    row?.declaredClassBand &&
+                                    selectableOptions.length === 0 && (
+                                      <p className="text-sm text-destructive mt-1">
+                                        この日の{row.declaredClassBand}クラスのレッスンはありません
+                                      </p>
+                                    )}
+                                  <p className="text-xs text-muted-foreground mt-2">
+                                    欠席連絡はレッスン開始時刻までです。開始後は振替登録できません。
+                                  </p>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleAddRow}
+                      className="w-full"
+                      data-testid="button-add-row"
+                    >
+                      <PlusIcon className="w-4 h-4 mr-2" />
+                      子どもを追加（最大5名）
+                    </Button>
+
+                    <Collapsible open={optionalOpen} onOpenChange={setOptionalOpen}>
+                      <CollapsibleTrigger asChild>
+                        <Button type="button" variant="outline" className="w-full" data-testid="button-toggle-optional-fields">
+                          任意項目 {optionalOpen ? "を閉じる" : "を開く"}
+                        </Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="space-y-4 pt-4">
+                        <FormField
+                          control={absenceForm.control}
+                          name="reason"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                理由
+                                <span className="text-muted-foreground text-xs ml-2">（任意）</span>
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  {...field}
+                                  type="text"
+                                  maxLength={200}
+                                  placeholder="例: 体調不良"
+                                  className="h-12"
+                                  data-testid="input-absence-reason"
+                                />
+                              </FormControl>
+                              <p className="text-xs text-muted-foreground">
+                                200文字以内で入力できます
                               </p>
-                            )}
-                          <p className="text-xs text-muted-foreground mt-2">
-                            欠席連絡はレッスン開始時刻までです。開始後は振替登録できません。
-                          </p>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
 
-                    <FormField
-                      control={absenceForm.control}
-                      name="reason"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>
-                            理由
-                            <span className="text-muted-foreground text-xs ml-2">（任意）</span>
-                          </FormLabel>
-                          <FormControl>
-                            <Input
-                              {...field}
-                              type="text"
-                              maxLength={200}
-                              placeholder="例: 体調不良"
-                              className="h-12"
-                              data-testid="input-absence-reason"
-                            />
-                          </FormControl>
-                          <p className="text-xs text-muted-foreground">
-                            200文字以内で入力できます
-                          </p>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    <FormField
-                      control={absenceForm.control}
-                      name="contactEmail"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>
-                            通知用メールアドレス
-                            <span className="text-muted-foreground text-xs ml-2">（任意）</span>
-                          </FormLabel>
-                          <FormControl>
-                            <Input
-                              {...field}
-                              type="email"
-                              placeholder="example@email.com"
-                              className="h-12"
-                              data-testid="input-contact-email"
-                            />
-                          </FormControl>
-                          <p className="text-xs text-muted-foreground">
-                            入力すると確認コードと欠席完了通知がメールで届きます
-                          </p>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                        <FormField
+                          control={absenceForm.control}
+                          name="contactEmail"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                通知用メールアドレス
+                                <span className="text-muted-foreground text-xs ml-2">（任意）</span>
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  {...field}
+                                  type="email"
+                                  placeholder="example@email.com"
+                                  className="h-12"
+                                  data-testid="input-contact-email"
+                                />
+                              </FormControl>
+                              <p className="text-xs text-muted-foreground">
+                                入力すると確認コードと欠席完了通知がメールで届きます
+                              </p>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </CollapsibleContent>
+                    </Collapsible>
 
                     <Button
                       type="submit"
                       className="w-full h-12 text-base font-semibold"
-                      data-testid="button-submit-absence"
+                      disabled={absenceForm.formState.isSubmitting}
+                      data-testid="button-submit-absence-batch"
                     >
-                      欠席連絡を登録
+                      {absenceForm.formState.isSubmitting
+                        ? "登録中..."
+                        : isClosureMode
+                          ? "休講振替権を登録"
+                          : "欠席連絡を登録"}
                     </Button>
                   </form>
                 </Form>
@@ -849,47 +1157,64 @@ export default function ParentPage() {
 
 
       <Dialog open={showConfirmCodeDialog} onOpenChange={setShowConfirmCodeDialog}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-center text-xl">欠席連絡を受け付けました</DialogTitle>
             <DialogDescription className="text-center">
-              下記の確認コードを必ずメモしてください。<br />
-              予約確認・キャンセルに必要です。
+              子どもごとの確認コードと再開リンクです。<br />
+              必ず保存してください。
             </DialogDescription>
           </DialogHeader>
-          <div className="flex flex-col items-center gap-4 py-6">
-            <div className="text-center">
-              <p className="text-sm text-muted-foreground mb-2">確認コード</p>
-              <div className="flex items-center justify-center gap-2 mb-4">
-                <span
-                  className="text-4xl font-bold tracking-[0.3em] font-mono text-primary"
-                  data-testid="text-confirm-code"
-                >
-                  {confirmCode}
-                </span>
-              </div>
-              <Button
-                onClick={copyConfirmCode}
-                variant="outline"
-                className="w-full mb-2"
-                data-testid="button-copy-code"
-              >
-                <CopyIcon className="w-5 h-5 mr-2" />
-                確認コードをコピー
-              </Button>
-              <p className="text-sm font-bold text-primary">
-                📸 スクリーンショットで保存してください
-              </p>
-            </div>
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-800 w-full">
-              <p className="font-semibold mb-1">重要</p>
-              <ul className="list-disc list-inside space-y-1">
-                <li>この確認コードはスクリーンショットやメモで保存してください</li>
-                <li>「予約確認」ページからコードを入力すると予約状況を確認できます</li>
-                <li>メールアドレスを入力した場合は、メールでも確認コードが届きます</li>
-                <li>欠席連絡はレッスン開始時刻までです。開始後は振替登録できません。</li>
-              </ul>
-            </div>
+          <div className="space-y-3 py-2">
+            {confirmItems.map((item, index) => {
+              const resumeUrl = buildResumeUrl(item.resumeToken);
+              return (
+                <div key={`${item.absenceId}-${index}`} className="rounded-lg border p-3 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-semibold">{item.childName}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {item.absentDateISO} / {item.declaredClassBand}
+                      </p>
+                    </div>
+                    <span className="text-2xl font-bold tracking-[0.2em] font-mono text-primary" data-testid={`text-confirm-code-${index}`}>
+                      {item.confirmCode}
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted-foreground break-all">
+                    振替リンク: <a href={`/?token=${item.resumeToken}`} className="underline">{resumeUrl}</a>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => copyText(item.confirmCode, `${item.childName}さんの確認コードをコピーしました。`)}
+                      data-testid={`button-copy-code-${index}`}
+                    >
+                      <CopyIcon className="w-4 h-4 mr-2" />
+                      コードをコピー
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => copyText(resumeUrl, `${item.childName}さんの振替リンクをコピーしました。`)}
+                      data-testid={`button-copy-link-${index}`}
+                    >
+                      <CopyIcon className="w-4 h-4 mr-2" />
+                      リンクをコピー
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-800 w-full">
+            <p className="font-semibold mb-1">重要</p>
+            <ul className="list-disc list-inside space-y-1">
+              <li>確認コードはスクリーンショットやメモで保存してください</li>
+              <li>「予約確認」ページからコードを入力すると予約状況を確認できます</li>
+              <li>メールアドレスを入力した場合は、メールでも確認コードが届きます</li>
+            </ul>
           </div>
           <Button
             onClick={() => setShowConfirmCodeDialog(false)}
