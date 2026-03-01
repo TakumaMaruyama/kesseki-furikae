@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
@@ -132,6 +132,8 @@ export default function ParentPage() {
   const [showConfirmCodeDialog, setShowConfirmCodeDialog] = useState(false);
   const [confirmItems, setConfirmItems] = useState<BatchResultItem[]>([]);
   const [optionalOpen, setOptionalOpen] = useState(false);
+  const reasonInputRef = useRef<HTMLInputElement | null>(null);
+  const contactEmailInputRef = useRef<HTMLInputElement | null>(null);
   const [slotOptionsByKey, setSlotOptionsByKey] = useState<Record<string, ClassSlotOption[]>>({});
   const [loadingSlotKeys, setLoadingSlotKeys] = useState<Set<string>>(new Set());
   const [closureCode, setClosureCode] = useState("");
@@ -165,6 +167,17 @@ export default function ParentPage() {
     name: "items",
   });
   const watchedItems = absenceForm.watch("items");
+  const optionalReasonValue = absenceForm.watch("reason");
+  const optionalContactEmailValue = absenceForm.watch("contactEmail");
+  const isOptionalSectionOpen = optionalOpen || !!optionalReasonValue?.trim() || !!optionalContactEmailValue?.trim();
+
+  const openOptionalAndFocus = (target: "reason" | "contactEmail") => {
+    setOptionalOpen(true);
+    window.setTimeout(() => {
+      const inputElement = target === "reason" ? reasonInputRef.current : contactEmailInputRef.current;
+      inputElement?.focus();
+    }, 0);
+  };
 
   const getSlotCacheKey = (absentDateISO?: string, declaredClassBand?: string) => {
     if (!absentDateISO || !declaredClassBand) return "";
@@ -662,54 +675,6 @@ export default function ParentPage() {
           ) : (
             <Card className="border-2">
               <CardContent className="p-4 sm:p-6 space-y-6">
-                {!token && (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
-                    <div className="flex items-center gap-2 text-amber-900">
-                      <AlertTriangleIcon className="w-4 h-4" />
-                      <p className="font-semibold text-sm">臨時休講等による振替が必要な場合</p>
-                    </div>
-
-                    {!closureValidation ? (
-                      <div className="flex flex-col sm:flex-row gap-2">
-                        <Input
-                          value={closureCode}
-                          onChange={(event) => setClosureCode(event.target.value)}
-                          placeholder="共通コードを入力"
-                          className="h-10"
-                          data-testid="input-closure-code"
-                        />
-                        <Button
-                          type="button"
-                          onClick={handleValidateClosureCode}
-                          disabled={isValidatingClosureCode}
-                          className="sm:w-40"
-                          data-testid="button-validate-closure-code"
-                        >
-                          {isValidatingClosureCode ? "確認中..." : "コード確認"}
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="space-y-2 text-sm">
-                        <p>
-                          <span className="font-semibold">イベント:</span> {closureValidation.name}
-                        </p>
-                        <p>
-                          <span className="font-semibold">残り利用回数:</span> {closureValidation.usageRemaining} / {closureValidation.usageLimit}
-                        </p>
-                        <p>
-                          <span className="font-semibold">有効期限:</span> {closureValidation.expiresAt}
-                        </p>
-                        <div className="flex gap-2 pt-1">
-                          <Badge variant="secondary">休講コード適用中</Badge>
-                          <Button type="button" variant="outline" size="sm" onClick={clearClosureMode} data-testid="button-clear-closure-mode">
-                            通常欠席に戻す
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 <Form {...absenceForm}>
                   <form onSubmit={absenceForm.handleSubmit(onAbsenceSubmit)} className="space-y-6">
                     <div className="space-y-3">
@@ -881,12 +846,30 @@ export default function ParentPage() {
                       子どもを追加（最大5名）
                     </Button>
 
-                    <Collapsible open={optionalOpen} onOpenChange={setOptionalOpen}>
-                      <CollapsibleTrigger asChild>
-                        <Button type="button" variant="outline" className="w-full" data-testid="button-toggle-optional-fields">
-                          任意項目 {optionalOpen ? "を閉じる" : "を開く"}
+                    {!isOptionalSectionOpen && (
+                      <div className="space-y-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full justify-start"
+                          onClick={() => openOptionalAndFocus("reason")}
+                          data-testid="button-open-optional-reason"
+                        >
+                          理由（任意）
                         </Button>
-                      </CollapsibleTrigger>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full justify-start"
+                          onClick={() => openOptionalAndFocus("contactEmail")}
+                          data-testid="button-open-optional-contact-email"
+                        >
+                          通知用メールアドレス（任意）
+                        </Button>
+                      </div>
+                    )}
+
+                    <Collapsible open={isOptionalSectionOpen} onOpenChange={setOptionalOpen}>
                       <CollapsibleContent className="space-y-4 pt-4">
                         <FormField
                           control={absenceForm.control}
@@ -900,6 +883,10 @@ export default function ParentPage() {
                               <FormControl>
                                 <Input
                                   {...field}
+                                  ref={(element) => {
+                                    field.ref(element);
+                                    reasonInputRef.current = element;
+                                  }}
                                   type="text"
                                   maxLength={200}
                                   placeholder="例: 体調不良"
@@ -927,6 +914,10 @@ export default function ParentPage() {
                               <FormControl>
                                 <Input
                                   {...field}
+                                  ref={(element) => {
+                                    field.ref(element);
+                                    contactEmailInputRef.current = element;
+                                  }}
                                   type="email"
                                   placeholder="example@email.com"
                                   className="h-12"
@@ -940,6 +931,15 @@ export default function ParentPage() {
                             </FormItem>
                           )}
                         />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="w-full"
+                          onClick={() => setOptionalOpen(false)}
+                          data-testid="button-close-optional-fields"
+                        >
+                          任意項目を閉じる
+                        </Button>
                       </CollapsibleContent>
                     </Collapsible>
 
@@ -955,6 +955,54 @@ export default function ParentPage() {
                           ? "休講振替権を登録"
                           : "欠席連絡を登録"}
                     </Button>
+
+                    {!token && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
+                        <div className="flex items-center gap-2 text-amber-900">
+                          <AlertTriangleIcon className="w-4 h-4" />
+                          <p className="font-semibold text-sm">臨時休講等による振替が必要な場合</p>
+                        </div>
+
+                        {!closureValidation ? (
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <Input
+                              value={closureCode}
+                              onChange={(event) => setClosureCode(event.target.value)}
+                              placeholder="共通コードを入力"
+                              className="h-10"
+                              data-testid="input-closure-code"
+                            />
+                            <Button
+                              type="button"
+                              onClick={handleValidateClosureCode}
+                              disabled={isValidatingClosureCode}
+                              className="sm:w-40"
+                              data-testid="button-validate-closure-code"
+                            >
+                              {isValidatingClosureCode ? "確認中..." : "コード確認"}
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="space-y-2 text-sm">
+                            <p>
+                              <span className="font-semibold">イベント:</span> {closureValidation.name}
+                            </p>
+                            <p>
+                              <span className="font-semibold">残り利用回数:</span> {closureValidation.usageRemaining} / {closureValidation.usageLimit}
+                            </p>
+                            <p>
+                              <span className="font-semibold">有効期限:</span> {closureValidation.expiresAt}
+                            </p>
+                            <div className="flex gap-2 pt-1">
+                              <Badge variant="secondary">休講コード適用中</Badge>
+                              <Button type="button" variant="outline" size="sm" onClick={clearClosureMode} data-testid="button-clear-closure-mode">
+                                通常欠席に戻す
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </form>
                 </Form>
               </CardContent>
