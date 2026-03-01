@@ -889,6 +889,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const data = createAbsenceRequestSchema.parse(req.body);
       const absentDate = parseJstDate(data.absentDateISO);
+      const normalizedReason = data.reason?.trim() || null;
 
       const originalSlot = await storage.getClassSlotById(data.originalSlotId);
       if (!originalSlot) {
@@ -942,6 +943,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         absentDate: absentDate,
         originalSlotId: data.originalSlotId,
         contactEmail: data.contactEmail || null,
+        reason: normalizedReason,
         resumeToken: resumeToken,
         confirmCode: confirmCode,
         makeupDeadline: makeupDeadline,
@@ -997,6 +999,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         absentDate: formatJstDate(absence.absentDate),
         originalSlotId: absence.originalSlotId,
         contactEmail: absence.contactEmail,
+        reason: absence.reason,
         makeupDeadline: formatJstDate(absence.makeupDeadline),
         makeupStatus: absence.makeupStatus,
       });

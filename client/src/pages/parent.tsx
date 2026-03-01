@@ -31,6 +31,7 @@ type AbsenceData = {
   absentDate: string;
   originalSlotId?: string;
   contactEmail: string | null;
+  reason?: string | null;
   makeupDeadline: string;
   makeupStatus: string;
   resumeToken?: string;
@@ -103,6 +104,7 @@ export default function ParentPage() {
       absentDateISO: "",
       originalSlotId: "",
       contactEmail: "",
+      reason: "",
     },
     mode: "onChange",
   });
@@ -230,6 +232,7 @@ export default function ParentPage() {
     declaredClassBand: string,
     absentDate: string,
     contactEmail: string | undefined,
+    reason: string | undefined,
     result: { absenceId: string; resumeToken: string; makeupDeadline: string; confirmCode?: string }
   ) => {
     setAbsenceData({
@@ -238,6 +241,7 @@ export default function ParentPage() {
       declaredClassBand,
       absentDate,
       contactEmail: contactEmail || null,
+      reason: reason?.trim() ? reason.trim() : null,
       makeupDeadline: result.makeupDeadline,
       makeupStatus: "PENDING",
       resumeToken: result.resumeToken,
@@ -272,7 +276,7 @@ export default function ParentPage() {
 
       toast({ title: "欠席連絡を受け付けました", description: "振替枠を自動的に検索します" });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/daily-lessons"] });
-      handleAbsenceSuccess(data.childName, data.declaredClassBand, data.absentDateISO, data.contactEmail, result);
+      handleAbsenceSuccess(data.childName, data.declaredClassBand, data.absentDateISO, data.contactEmail, data.reason, result);
     } catch (error: any) {
       toast({ title: "エラー", description: error.message || "欠席連絡の登録に失敗しました", variant: "destructive" });
     }
@@ -577,6 +581,33 @@ export default function ParentPage() {
                             )}
                           <p className="text-xs text-muted-foreground mt-2">
                             欠席連絡はレッスン開始時刻までです。開始後は振替登録できません。
+                          </p>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={absenceForm.control}
+                      name="reason"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            理由
+                            <span className="text-muted-foreground text-xs ml-2">（任意）</span>
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              {...field}
+                              type="text"
+                              maxLength={200}
+                              placeholder="例: 体調不良"
+                              className="h-12"
+                              data-testid="input-absence-reason"
+                            />
+                          </FormControl>
+                          <p className="text-xs text-muted-foreground">
+                            200文字以内で入力できます
                           </p>
                           <FormMessage />
                         </FormItem>

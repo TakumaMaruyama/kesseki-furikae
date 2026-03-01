@@ -121,6 +121,7 @@ export const absences = pgTable("absences", {
   absentDate: timestamp("absent_date").notNull(),
   originalSlotId: varchar("original_slot_id").notNull(),
   contactEmail: varchar("contact_email"),
+  reason: text("reason"),
   resumeToken: varchar("resume_token").unique().notNull(),
   confirmCode: varchar("confirm_code", { length: 6 }).notNull(),
   makeupDeadline: timestamp("makeup_deadline").notNull(),
@@ -214,6 +215,7 @@ export const absenceSchema = z.object({
   absentDate: z.date(),
   originalSlotId: z.string(),
   contactEmail: z.string().email().nullable(),
+  reason: z.string().nullable(),
   resumeToken: z.string(),
   makeupDeadline: z.date(),
   makeupStatus: z.enum(["PENDING", "MAKEUP_CONFIRMED", "EXPIRED", "CANCELLED"]),
@@ -234,6 +236,7 @@ export const createAbsenceRequestSchema = z.object({
   absentDateISO: z.string().min(1, "欠席日を選択してください"),
   originalSlotId: z.string().min(1, "欠席するレッスン枠を選択してください"),
   contactEmail: z.string().email("正しいメールアドレスを入力してください").optional().or(z.literal("")),
+  reason: z.string().trim().max(200, "理由は200文字以内で入力してください").optional(),
 });
 
 export const classSlotSchema = z.object({
