@@ -25,6 +25,42 @@ import {
   SlotDialog,
 } from "@/components/admin";
 
+const CLASS_BAND_ORDER: Record<string, number> = {
+  初級: 0,
+  中級: 1,
+  上級: 2,
+};
+
+function getClassBandOrder(classBand: string): number {
+  return CLASS_BAND_ORDER[classBand] ?? Number.MAX_SAFE_INTEGER;
+}
+
+function sortByStartTimeThenClassBand(a: ClassSlot, b: ClassSlot): number {
+  const timeCompare = a.startTime.localeCompare(b.startTime);
+  if (timeCompare !== 0) return timeCompare;
+  return getClassBandOrder(a.classBand) - getClassBandOrder(b.classBand);
+}
+
+function sortByClassBand(a: ClassSlot, b: ClassSlot): number {
+  return getClassBandOrder(a.classBand) - getClassBandOrder(b.classBand);
+}
+
+function groupSlotsByStartTime(slots: ClassSlot[]): Record<string, ClassSlot[]> {
+  const grouped: Record<string, ClassSlot[]> = {};
+  for (const slot of slots) {
+    if (!grouped[slot.startTime]) {
+      grouped[slot.startTime] = [];
+    }
+    grouped[slot.startTime].push(slot);
+  }
+
+  for (const startTime of Object.keys(grouped)) {
+    grouped[startTime].sort(sortByClassBand);
+  }
+
+  return grouped;
+}
+
 export default function AdminPage() {
   const { toast } = useToast();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
@@ -508,73 +544,85 @@ export default function AdminPage() {
                               {format(selectedDate, "yyyy年M月d日(E)", { locale: ja })}
                             </h3>
                             <div className="space-y-3">
-                              {daySlots
-                                .sort((a, b) => a.startTime.localeCompare(b.startTime))
-                                .map((slot) => (
-                                  <div
-                                    key={slot.id}
-                                    className="border-2 rounded-lg p-4 hover:bg-muted/30 transition-colors"
-                                    data-testid={`row-slot-${slot.id}`}
-                                  >
-                                    <div className="flex items-start justify-between gap-4">
-                                      <div className="flex items-start gap-3 flex-1">
-                                        <input
-                                          type="checkbox"
-                                          checked={selectedSlots.has(slot.id)}
-                                          onChange={() => handleToggleSlotSelection(slot.id)}
-                                          className="mt-1 h-4 w-4 rounded border-gray-300"
-                                          data-testid={`checkbox-slot-${slot.id}`}
-                                        />
-                                        <div className="flex-1 space-y-2">
-                                          <div className="flex items-center gap-2">
-                                            <p className="font-semibold text-lg">{slot.startTime}</p>
-                                            <Badge variant="outline">{slot.classBand}</Badge>
-                                          </div>
-                                          <p className="text-sm text-muted-foreground">{slot.courseLabel}</p>
-                                          <div className="grid grid-cols-2 gap-2 text-sm">
-                                            <div>
-                                              <span className="text-muted-foreground">振替可能枠: </span>
-                                              <span className="font-semibold">{Math.max(0, slot.capacityLimit - slot.capacityCurrent)}</span>
+                              {(() => {
+                                const groupedByStartTime = groupSlotsByStartTime(daySlots);
+                                const sortedStartTimes = Object.keys(groupedByStartTime).sort((a, b) => a.localeCompare(b));
+
+                                return sortedStartTimes.map((startTime) => (
+                                  <div key={startTime} className="border-2 rounded-lg p-3 space-y-3">
+                                    <div className="border-b px-1 pb-2">
+                                      <p className="text-sm font-semibold text-muted-foreground">{startTime} の枠</p>
+                                    </div>
+                                    <div className="space-y-3">
+                                      {groupedByStartTime[startTime].map((slot) => (
+                                        <div
+                                          key={slot.id}
+                                          className="border rounded-lg p-4 hover:bg-muted/30 transition-colors"
+                                          data-testid={`row-slot-${slot.id}`}
+                                        >
+                                          <div className="flex items-start justify-between gap-4">
+                                            <div className="flex items-start gap-3 flex-1">
+                                              <input
+                                                type="checkbox"
+                                                checked={selectedSlots.has(slot.id)}
+                                                onChange={() => handleToggleSlotSelection(slot.id)}
+                                                className="mt-1 h-4 w-4 rounded border-gray-300"
+                                                data-testid={`checkbox-slot-${slot.id}`}
+                                              />
+                                              <div className="flex-1 space-y-2">
+                                                <div className="flex items-center gap-2">
+                                                  <p className="font-semibold text-lg">{slot.startTime}</p>
+                                                  <Badge variant="outline">{slot.classBand}</Badge>
+                                                </div>
+                                                <p className="text-sm text-muted-foreground">{slot.courseLabel}</p>
+                                                <div className="grid grid-cols-2 gap-2 text-sm">
+                                                  <div>
+                                                    <span className="text-muted-foreground">振替可能枠: </span>
+                                                    <span className="font-semibold">{Math.max(0, slot.capacityLimit - slot.capacityCurrent)}</span>
+                                                  </div>
+                                                  <div>
+                                                    <span className="text-muted-foreground">使用済み: </span>
+                                                    <span className="font-semibold">{slot.capacityMakeupUsed}</span>
+                                                  </div>
+                                                </div>
+                                                <div className="text-sm">
+                                                  <span className="text-muted-foreground">残り枠数: </span>
+                                                  <span className="text-lg font-bold text-primary">
+                                                    {getRemainingCapacity(slot)}
+                                                  </span>
+                                                </div>
+                                              </div>
                                             </div>
-                                            <div>
-                                              <span className="text-muted-foreground">使用済み: </span>
-                                              <span className="font-semibold">{slot.capacityMakeupUsed}</span>
+                                            <div className="flex flex-col gap-2">
+                                              <Button
+                                                onClick={() => {
+                                                  setEditingSlotData(slot);
+                                                  setShowSlotDialog(true);
+                                                }}
+                                                variant="outline"
+                                                size="sm"
+                                                data-testid={`button-edit-slot-${slot.id}`}
+                                              >
+                                                編集
+                                              </Button>
+                                              <Button
+                                                onClick={() => {
+                                                  confirmAndDeleteSlot(slot);
+                                                }}
+                                                variant="outline"
+                                                size="sm"
+                                                data-testid={`button-delete-slot-${slot.id}`}
+                                              >
+                                                削除
+                                              </Button>
                                             </div>
-                                          </div>
-                                          <div className="text-sm">
-                                            <span className="text-muted-foreground">残り枠数: </span>
-                                            <span className="text-lg font-bold text-primary">
-                                              {getRemainingCapacity(slot)}
-                                            </span>
                                           </div>
                                         </div>
-                                      </div>
-                                      <div className="flex flex-col gap-2">
-                                        <Button
-                                          onClick={() => {
-                                            setEditingSlotData(slot);
-                                            setShowSlotDialog(true);
-                                          }}
-                                          variant="outline"
-                                          size="sm"
-                                          data-testid={`button-edit-slot-${slot.id}`}
-                                        >
-                                          編集
-                                        </Button>
-                                        <Button
-                                          onClick={() => {
-                                            confirmAndDeleteSlot(slot);
-                                          }}
-                                          variant="outline"
-                                          size="sm"
-                                          data-testid={`button-delete-slot-${slot.id}`}
-                                        >
-                                          削除
-                                        </Button>
-                                      </div>
+                                      ))}
                                     </div>
                                   </div>
-                                ))}
+                                ));
+                              })()}
                             </div>
                           </>
                         );
@@ -613,79 +661,92 @@ export default function AdminPage() {
                                 {slots.length}件の枠
                               </p>
                             </div>
-                            <div className="divide-y">
-                              {slots
-                                .sort((a, b) => a.startTime.localeCompare(b.startTime))
-                                .map((slot) => (
-                                  <div
-                                    key={slot.id}
-                                    className="p-4 hover:bg-muted/30 transition-colors"
-                                    data-testid={`row-slot-${slot.id}`}
-                                  >
-                                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                                      <div className="flex items-start gap-3 flex-1">
-                                        <input
-                                          type="checkbox"
-                                          checked={selectedSlots.has(slot.id)}
-                                          onChange={() => handleToggleSlotSelection(slot.id)}
-                                          className="mt-1 h-4 w-4 rounded border-gray-300"
-                                          data-testid={`checkbox-slot-list-${slot.id}`}
-                                        />
-                                        <div className="flex-1 grid grid-cols-1 md:grid-cols-4 gap-3">
-                                          <div>
-                                            <p className="text-xs text-muted-foreground mb-1">時刻・コース</p>
-                                            <p className="font-semibold">{slot.startTime}</p>
-                                            <p className="text-sm text-muted-foreground">{slot.courseLabel}</p>
-                                          </div>
-                                          <div>
-                                            <p className="text-xs text-muted-foreground mb-1">クラス帯</p>
-                                            <Badge variant="outline" className="text-sm">
-                                              {slot.classBand}
-                                            </Badge>
-                                          </div>
-                                          <div>
-                                            <p className="text-xs text-muted-foreground mb-1">振替可能枠（自動計算）</p>
-                                            <p className="font-semibold">
-                                              {Math.max(0, slot.capacityLimit - slot.capacityCurrent)} 枠
-                                            </p>
-                                            <p className="text-xs text-muted-foreground">
-                                              使用済み: {slot.capacityMakeupUsed}
-                                            </p>
-                                          </div>
-                                          <div>
-                                            <p className="text-xs text-muted-foreground mb-1">残り枠数</p>
-                                            <p className="text-lg font-bold text-primary">
-                                              {getRemainingCapacity(slot)}
-                                            </p>
+                            <div className="space-y-4 p-4">
+                              {(() => {
+                                const sortedSlots = [...slots].sort(sortByStartTimeThenClassBand);
+                                const groupedByStartTime = groupSlotsByStartTime(sortedSlots);
+                                const sortedStartTimes = Object.keys(groupedByStartTime).sort((a, b) => a.localeCompare(b));
+
+                                return sortedStartTimes.map((startTime) => (
+                                  <div key={startTime} className="border-2 rounded-lg overflow-hidden">
+                                    <div className="bg-muted/30 px-4 py-2 border-b">
+                                      <p className="text-sm font-semibold">{startTime}</p>
+                                    </div>
+                                    <div className="divide-y">
+                                      {groupedByStartTime[startTime].map((slot) => (
+                                        <div
+                                          key={slot.id}
+                                          className="p-4 hover:bg-muted/30 transition-colors"
+                                          data-testid={`row-slot-${slot.id}`}
+                                        >
+                                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                            <div className="flex items-start gap-3 flex-1">
+                                              <input
+                                                type="checkbox"
+                                                checked={selectedSlots.has(slot.id)}
+                                                onChange={() => handleToggleSlotSelection(slot.id)}
+                                                className="mt-1 h-4 w-4 rounded border-gray-300"
+                                                data-testid={`checkbox-slot-list-${slot.id}`}
+                                              />
+                                              <div className="flex-1 grid grid-cols-1 md:grid-cols-4 gap-3">
+                                                <div>
+                                                  <p className="text-xs text-muted-foreground mb-1">時刻・コース</p>
+                                                  <p className="font-semibold">{slot.startTime}</p>
+                                                  <p className="text-sm text-muted-foreground">{slot.courseLabel}</p>
+                                                </div>
+                                                <div>
+                                                  <p className="text-xs text-muted-foreground mb-1">クラス帯</p>
+                                                  <Badge variant="outline" className="text-sm">
+                                                    {slot.classBand}
+                                                  </Badge>
+                                                </div>
+                                                <div>
+                                                  <p className="text-xs text-muted-foreground mb-1">振替可能枠（自動計算）</p>
+                                                  <p className="font-semibold">
+                                                    {Math.max(0, slot.capacityLimit - slot.capacityCurrent)} 枠
+                                                  </p>
+                                                  <p className="text-xs text-muted-foreground">
+                                                    使用済み: {slot.capacityMakeupUsed}
+                                                  </p>
+                                                </div>
+                                                <div>
+                                                  <p className="text-xs text-muted-foreground mb-1">残り枠数</p>
+                                                  <p className="text-lg font-bold text-primary">
+                                                    {getRemainingCapacity(slot)}
+                                                  </p>
+                                                </div>
+                                              </div>
+                                            </div>
+                                            <div className="flex gap-2">
+                                              <Button
+                                                onClick={() => {
+                                                  setEditingSlotData(slot);
+                                                  setShowSlotDialog(true);
+                                                }}
+                                                variant="outline"
+                                                size="sm"
+                                                data-testid={`button-edit-slot-${slot.id}`}
+                                              >
+                                                編集
+                                              </Button>
+                                              <Button
+                                                onClick={() => {
+                                                  confirmAndDeleteSlot(slot);
+                                                }}
+                                                variant="outline"
+                                                size="sm"
+                                                data-testid={`button-delete-slot-${slot.id}`}
+                                              >
+                                                削除
+                                              </Button>
+                                            </div>
                                           </div>
                                         </div>
-                                      </div>
-                                      <div className="flex gap-2">
-                                        <Button
-                                          onClick={() => {
-                                            setEditingSlotData(slot);
-                                            setShowSlotDialog(true);
-                                          }}
-                                          variant="outline"
-                                          size="sm"
-                                          data-testid={`button-edit-slot-${slot.id}`}
-                                        >
-                                          編集
-                                        </Button>
-                                        <Button
-                                          onClick={() => {
-                                            confirmAndDeleteSlot(slot);
-                                          }}
-                                          variant="outline"
-                                          size="sm"
-                                          data-testid={`button-delete-slot-${slot.id}`}
-                                        >
-                                          削除
-                                        </Button>
-                                      </div>
+                                      ))}
                                     </div>
                                   </div>
-                                ))}
+                                ));
+                              })()}
                             </div>
                           </div>
                         );
