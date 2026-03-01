@@ -5,10 +5,25 @@ export type LessonWithStatus = ClassSlot & {
     makeupCount: number;
 };
 
+export type LessonStatusAbsence = {
+    id: string;
+    childName: string;
+    contactEmail: string | null;
+    makeupStatus: string;
+    confirmCode: string;
+    reason: string | null;
+};
+
+export type LessonStatusMakeupRequest = {
+    id: string;
+    childName: string;
+    absentDate: string | Date;
+};
+
 export type LessonStatus = {
     slot: ClassSlot;
-    absences: any[];
-    makeupRequests: any[];
+    absences: LessonStatusAbsence[];
+    makeupRequests: LessonStatusMakeupRequest[];
 };
 
 export type DashboardStats = {
@@ -26,6 +41,7 @@ export type EnrichedAbsence = {
     absentDate: string;
     makeupStatus: string;
     confirmCode: string;
+    reason: string | null;
     courseLabel: string | null;
     startTime: string | null;
     createdAt: string;

@@ -151,7 +151,15 @@ export function LessonsStatusView() {
                                                 {lessonStatus.absences.map((absence) => (
                                                     <div key={absence.id} className="p-3 border rounded-lg">
                                                         <p className="font-medium">{absence.childName}</p>
-                                                        <p className="text-xs text-muted-foreground">{absence.contactEmail}</p>
+                                                        <p className="text-xs text-muted-foreground">{absence.contactEmail || "-"}</p>
+                                                        <p className="text-xs text-muted-foreground mt-1">
+                                                            確認コード: <span className="font-mono">{absence.confirmCode}</span>
+                                                        </p>
+                                                        {absence.reason && (
+                                                            <p className="text-xs text-muted-foreground mt-1">
+                                                                理由: {absence.reason}
+                                                            </p>
+                                                        )}
                                                         <Badge variant="outline" className="mt-1 text-xs">
                                                             {absence.makeupStatus === 'MAKEUP_CONFIRMED' ? '振替済み' : '振替待ち'}
                                                         </Badge>

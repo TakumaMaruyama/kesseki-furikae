@@ -152,6 +152,7 @@ export function HistoryView() {
                                             <TableHead>レッスン</TableHead>
                                             <TableHead>ステータス</TableHead>
                                             <TableHead>確認コード</TableHead>
+                                            <TableHead>理由</TableHead>
                                             <TableHead>操作</TableHead>
                                         </TableRow>
                                     </TableHeader>
@@ -168,6 +169,7 @@ export function HistoryView() {
                                                 </TableCell>
                                                 <TableCell>{getStatusBadge(absence.makeupStatus)}</TableCell>
                                                 <TableCell className="font-mono text-sm">{absence.confirmCode}</TableCell>
+                                                <TableCell>{absence.reason?.trim() || "-"}</TableCell>
                                                 <TableCell>
                                                     {(absence.makeupStatus === "PENDING" || absence.makeupStatus === "MAKEUP_CONFIRMED") && (
                                                         <Button
