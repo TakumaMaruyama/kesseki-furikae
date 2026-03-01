@@ -1,4 +1,4 @@
-import { pgTable, varchar, integer, timestamp, text, index, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, varchar, integer, timestamp, text, index, jsonb, boolean, uniqueIndex } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -91,6 +91,7 @@ export const classSlots = pgTable("class_slots", {
   startTime: varchar("start_time").notNull(),
   courseLabel: varchar("course_label").notNull(),
   classBand: varchar("class_band").notNull(),
+  isClosed: boolean("is_closed").notNull().default(false),
   capacityLimit: integer("capacity_limit").notNull(),
   capacityCurrent: integer("capacity_current").notNull(),
   capacityMakeupUsed: integer("capacity_makeup_used").notNull().default(0),
@@ -111,6 +112,49 @@ export const insertClassSlotSchema = createInsertSchema(classSlots).omit({
 export type InsertClassSlot = z.infer<typeof insertClassSlotSchema>;
 export type ClassSlot = typeof classSlots.$inferSelect;
 
+// Closure events (temporary class cancellation handling)
+export const closureEvents = pgTable("closure_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name").notNull(),
+  sharedCode: varchar("shared_code").notNull().unique(),
+  usageLimit: integer("usage_limit").notNull(),
+  usageUsed: integer("usage_used").notNull().default(0),
+  expiresAt: timestamp("expires_at").notNull(),
+  isArchived: boolean("is_archived").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("IDX_closure_events_expires_at").on(table.expiresAt),
+  index("IDX_closure_events_is_archived").on(table.isArchived),
+]);
+
+export const insertClosureEventSchema = createInsertSchema(closureEvents).omit({
+  id: true,
+  usageUsed: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertClosureEvent = z.infer<typeof insertClosureEventSchema>;
+export type ClosureEvent = typeof closureEvents.$inferSelect;
+
+export const closureEventSlots = pgTable("closure_event_slots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  closureEventId: varchar("closure_event_id").notNull().references(() => closureEvents.id, { onDelete: "cascade" }),
+  slotId: varchar("slot_id").notNull().references(() => classSlots.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("IDX_closure_event_slots_event_id").on(table.closureEventId),
+  index("IDX_closure_event_slots_slot_id").on(table.slotId),
+  uniqueIndex("UQ_closure_event_slots_event_slot").on(table.closureEventId, table.slotId),
+]);
+
+export const insertClosureEventSlotSchema = createInsertSchema(closureEventSlots).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertClosureEventSlot = z.infer<typeof insertClosureEventSlotSchema>;
+export type ClosureEventSlot = typeof closureEventSlots.$inferSelect;
+
 // Absences
 export const absences = pgTable("absences", {
   id: varchar("id").primaryKey(),
@@ -122,6 +166,8 @@ export const absences = pgTable("absences", {
   originalSlotId: varchar("original_slot_id").notNull(),
   contactEmail: varchar("contact_email"),
   reason: text("reason"),
+  sourceType: varchar("source_type").notNull().default("NORMAL"),
+  closureEventId: varchar("closure_event_id").references(() => closureEvents.id, { onDelete: "set null" }),
   resumeToken: varchar("resume_token").unique().notNull(),
   confirmCode: varchar("confirm_code", { length: 6 }).notNull(),
   makeupDeadline: timestamp("makeup_deadline").notNull(),
@@ -216,6 +262,8 @@ export const absenceSchema = z.object({
   originalSlotId: z.string(),
   contactEmail: z.string().email().nullable(),
   reason: z.string().nullable(),
+  sourceType: z.enum(["NORMAL", "CLOSURE_CODE"]),
+  closureEventId: z.string().nullable(),
   resumeToken: z.string(),
   makeupDeadline: z.date(),
   makeupStatus: z.enum(["PENDING", "MAKEUP_CONFIRMED", "EXPIRED", "CANCELLED"]),
@@ -223,7 +271,7 @@ export const absenceSchema = z.object({
   updatedAt: z.date(),
 });
 
-export const createAbsenceRequestSchema = z.object({
+export const absenceEntrySchema = z.object({
   childId: z.string().optional(),
   childName: z
     .string()
@@ -235,8 +283,49 @@ export const createAbsenceRequestSchema = z.object({
   }),
   absentDateISO: z.string().min(1, "欠席日を選択してください"),
   originalSlotId: z.string().min(1, "欠席するレッスン枠を選択してください"),
+});
+
+export const createAbsenceRequestSchema = absenceEntrySchema.extend({
   contactEmail: z.string().email("正しいメールアドレスを入力してください").optional().or(z.literal("")),
   reason: z.string().trim().max(200, "理由は200文字以内で入力してください").optional(),
+});
+
+export const createAbsencesBatchRequestSchema = z.object({
+  items: z.array(absenceEntrySchema)
+    .min(1, "少なくとも1名分の欠席情報を入力してください")
+    .max(5, "一度に登録できるのは5名までです"),
+  contactEmail: z.string().email("正しいメールアドレスを入力してください").optional().or(z.literal("")),
+  reason: z.string().trim().max(200, "理由は200文字以内で入力してください").optional(),
+});
+
+export const validateClosureCodeRequestSchema = z.object({
+  sharedCode: z.string().trim().min(1, "共通コードを入力してください"),
+});
+
+export const redeemClosureCodeRequestSchema = z.object({
+  sharedCode: z.string().trim().min(1, "共通コードを入力してください"),
+  items: z.array(absenceEntrySchema)
+    .min(1, "少なくとも1名分の振替権を入力してください")
+    .max(5, "一度に登録できるのは5名までです"),
+  contactEmail: z.string().email("正しいメールアドレスを入力してください").optional().or(z.literal("")),
+  reason: z.string().trim().max(200, "理由は200文字以内で入力してください").optional(),
+});
+
+export const createClosureEventRequestSchema = z.object({
+  name: z.string().trim().min(1, "イベント名を入力してください").max(100, "イベント名は100文字以内で入力してください"),
+  sharedCode: z
+    .string()
+    .trim()
+    .min(4, "共通コードは4文字以上で入力してください")
+    .max(30, "共通コードは30文字以内で入力してください")
+    .regex(/^[A-Za-z0-9_-]+$/, "共通コードは半角英数字・ハイフン・アンダースコアのみ使用できます"),
+  usageLimit: z.number().int().min(1, "利用上限は1以上で設定してください").max(500, "利用上限は500以下で設定してください"),
+  expiresAtISO: z.string().min(1, "有効期限を入力してください"),
+  slotIds: z.array(z.string().min(1)).min(1, "対象枠を1件以上選択してください"),
+});
+
+export const updateClosureEventSlotsRequestSchema = z.object({
+  slotIds: z.array(z.string().min(1)).min(1, "対象枠を1件以上選択してください"),
 });
 
 export const classSlotSchema = z.object({
@@ -245,6 +334,7 @@ export const classSlotSchema = z.object({
   startTime: z.string(),
   courseLabel: z.string(),
   classBand: z.enum(["初級", "中級", "上級"]),
+  isClosed: z.boolean(),
   capacityLimit: z.number(),
   capacityCurrent: z.number(),
   capacityMakeupUsed: z.number(),
@@ -387,6 +477,12 @@ export const loginUserSchema = z.object({
 });
 
 export type CreateAbsenceRequest = z.infer<typeof createAbsenceRequestSchema>;
+export type AbsenceEntryRequest = z.infer<typeof absenceEntrySchema>;
+export type CreateAbsencesBatchRequest = z.infer<typeof createAbsencesBatchRequestSchema>;
+export type ValidateClosureCodeRequest = z.infer<typeof validateClosureCodeRequestSchema>;
+export type RedeemClosureCodeRequest = z.infer<typeof redeemClosureCodeRequestSchema>;
+export type CreateClosureEventRequest = z.infer<typeof createClosureEventRequestSchema>;
+export type UpdateClosureEventSlotsRequest = z.infer<typeof updateClosureEventSlotsRequestSchema>;
 export type SearchSlotsRequest = z.infer<typeof searchSlotsRequestSchema>;
 export type BookRequest = z.infer<typeof bookRequestSchema>;
 export type UpdateSlotCapacityRequest = z.infer<typeof updateSlotCapacityRequestSchema>;
