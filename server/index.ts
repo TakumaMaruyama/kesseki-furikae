@@ -4,6 +4,7 @@ process.env.TZ = "Asia/Tokyo";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { ensureRuntimeSchema } from "./ensureRuntimeSchema";
 
 const app = express();
 
@@ -65,6 +66,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  await ensureRuntimeSchema();
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
