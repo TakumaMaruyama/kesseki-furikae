@@ -19,6 +19,37 @@ interface DailyStatusData {
     makeups: DailyStatusItem[];
 }
 
+const CLASS_BAND_ORDER: Record<string, number> = {
+    初級: 0,
+    中級: 1,
+    上級: 2,
+};
+
+function getClassBandOrder(classBand: string): number {
+    return CLASS_BAND_ORDER[classBand] ?? Number.MAX_SAFE_INTEGER;
+}
+
+function groupAndSortByStartTime(items: DailyStatusItem[]) {
+    const grouped = items.reduce<Record<string, DailyStatusItem[]>>((acc, item) => {
+        if (!acc[item.startTime]) {
+            acc[item.startTime] = [];
+        }
+        acc[item.startTime].push(item);
+        return acc;
+    }, {});
+
+    return Object.keys(grouped)
+        .sort((a, b) => a.localeCompare(b))
+        .map((startTime) => ({
+            startTime,
+            items: grouped[startTime].sort((a, b) => {
+                const classBandOrderDiff = getClassBandOrder(a.classBand) - getClassBandOrder(b.classBand);
+                if (classBandOrderDiff !== 0) return classBandOrderDiff;
+                return a.childName.localeCompare(b.childName, "ja");
+            }),
+        }));
+}
+
 export function DailyStatusView() {
     const [selectedDate, setSelectedDate] = useState<Date>(new Date());
 
@@ -86,15 +117,24 @@ export function DailyStatusView() {
                                                 </p>
                                             ) : (
                                                 <div className="space-y-2">
-                                                    {data?.absentees.map((item, index) => (
-                                                        <div
-                                                            key={index}
-                                                            className="border rounded-lg p-3 bg-destructive/5"
-                                                        >
-                                                            <p className="font-semibold">{item.childName}</p>
-                                                            <p className="text-sm text-muted-foreground">
-                                                                {item.startTime} {item.courseLabel} （{item.classBand}）
-                                                            </p>
+                                                    {groupAndSortByStartTime(data?.absentees || []).map((group) => (
+                                                        <div key={group.startTime} className="border-2 rounded-lg overflow-hidden">
+                                                            <div className="px-3 py-2 bg-destructive/10 border-b">
+                                                                <p className="text-sm font-semibold">{group.startTime}</p>
+                                                            </div>
+                                                            <div className="divide-y">
+                                                                {group.items.map((item, index) => (
+                                                                    <div
+                                                                        key={`${group.startTime}-${item.childName}-${index}`}
+                                                                        className="p-3 bg-destructive/5"
+                                                                    >
+                                                                        <p className="font-semibold">{item.childName}</p>
+                                                                        <p className="text-sm text-muted-foreground">
+                                                                            {item.courseLabel} （{item.classBand}）
+                                                                        </p>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
                                                         </div>
                                                     ))}
                                                 </div>
@@ -121,15 +161,24 @@ export function DailyStatusView() {
                                                 </p>
                                             ) : (
                                                 <div className="space-y-2">
-                                                    {data?.makeups.map((item, index) => (
-                                                        <div
-                                                            key={index}
-                                                            className="border rounded-lg p-3 bg-primary/5"
-                                                        >
-                                                            <p className="font-semibold">{item.childName}</p>
-                                                            <p className="text-sm text-muted-foreground">
-                                                                {item.startTime} {item.courseLabel} （{item.classBand}）
-                                                            </p>
+                                                    {groupAndSortByStartTime(data?.makeups || []).map((group) => (
+                                                        <div key={group.startTime} className="border-2 rounded-lg overflow-hidden">
+                                                            <div className="px-3 py-2 bg-primary/10 border-b">
+                                                                <p className="text-sm font-semibold">{group.startTime}</p>
+                                                            </div>
+                                                            <div className="divide-y">
+                                                                {group.items.map((item, index) => (
+                                                                    <div
+                                                                        key={`${group.startTime}-${item.childName}-${index}`}
+                                                                        className="p-3 bg-primary/5"
+                                                                    >
+                                                                        <p className="font-semibold">{item.childName}</p>
+                                                                        <p className="text-sm text-muted-foreground">
+                                                                            {item.courseLabel} （{item.classBand}）
+                                                                        </p>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
                                                         </div>
                                                     ))}
                                                 </div>
