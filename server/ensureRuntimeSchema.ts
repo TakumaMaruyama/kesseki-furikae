@@ -1,0 +1,54 @@
+import { sql } from "drizzle-orm";
+import { db } from "./db";
+import { log } from "./vite";
+
+const COMPAT_MIGRATION_STATEMENTS = [
+  `ALTER TABLE class_slots ADD COLUMN IF NOT EXISTS is_closed boolean NOT NULL DEFAULT false`,
+  `ALTER TABLE absences ADD COLUMN IF NOT EXISTS reason text`,
+  `ALTER TABLE absences ADD COLUMN IF NOT EXISTS source_type varchar NOT NULL DEFAULT 'NORMAL'`,
+  `ALTER TABLE absences ADD COLUMN IF NOT EXISTS closure_event_id varchar`,
+  `CREATE TABLE IF NOT EXISTS closure_events (
+    id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+    name varchar NOT NULL,
+    shared_code varchar NOT NULL UNIQUE,
+    usage_limit integer NOT NULL,
+    usage_used integer NOT NULL DEFAULT 0,
+    expires_at timestamp NOT NULL,
+    is_archived boolean NOT NULL DEFAULT false,
+    created_at timestamp DEFAULT now(),
+    updated_at timestamp DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS closure_event_slots (
+    id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+    closure_event_id varchar NOT NULL REFERENCES closure_events(id) ON DELETE cascade,
+    slot_id varchar NOT NULL REFERENCES class_slots(id) ON DELETE cascade,
+    created_at timestamp DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS IDX_closure_events_expires_at ON closure_events (expires_at)`,
+  `CREATE INDEX IF NOT EXISTS IDX_closure_events_is_archived ON closure_events (is_archived)`,
+  `CREATE INDEX IF NOT EXISTS IDX_closure_event_slots_event_id ON closure_event_slots (closure_event_id)`,
+  `CREATE INDEX IF NOT EXISTS IDX_closure_event_slots_slot_id ON closure_event_slots (slot_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS UQ_closure_event_slots_event_slot ON closure_event_slots (closure_event_id, slot_id)`,
+  `DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_constraint
+      WHERE conname = 'absences_closure_event_id_closure_events_id_fk'
+    ) THEN
+      ALTER TABLE absences
+      ADD CONSTRAINT absences_closure_event_id_closure_events_id_fk
+      FOREIGN KEY (closure_event_id)
+      REFERENCES closure_events(id)
+      ON DELETE set null;
+    END IF;
+  END $$`,
+];
+
+export async function ensureRuntimeSchema(): Promise<void> {
+  for (const statement of COMPAT_MIGRATION_STATEMENTS) {
+    await db.execute(sql.raw(statement));
+  }
+
+  log("runtime schema compatibility checks completed", "schema");
+}
