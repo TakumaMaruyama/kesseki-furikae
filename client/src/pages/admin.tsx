@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { ListIcon, CalendarIcon, InfoIcon, LogOutIcon, Loader2, ArchiveIcon } from "lucide-react";
+import { ListIcon, CalendarIcon, LogOutIcon, Loader2, ArchiveIcon } from "lucide-react";
 import type { ClassSlot } from "@shared/schema";
 import { formatJstDate, parseJstDate } from "@shared/jst";
 import { getRemainingCapacity } from "@shared/capacity";
@@ -501,19 +501,6 @@ export default function AdminPage() {
         <div className="container flex h-16 items-center justify-between px-6">
           <h1 className="text-xl font-bold">はまスイ 管理画面</h1>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                const helpSection = document.getElementById("help-section");
-                if (helpSection) {
-                  helpSection.scrollIntoView({ behavior: "smooth" });
-                }
-              }}
-            >
-              <InfoIcon className="w-4 h-4 mr-2" />
-              使い方
-            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -1046,86 +1033,6 @@ export default function AdminPage() {
           </TabsContent>
         </Tabs>
 
-        <section id="help-section" className="mt-12 space-y-6">
-          <h2 className="text-2xl font-bold">システム利用ガイド</h2>
-
-          <Card>
-            <CardHeader>
-              <h3 className="text-lg font-semibold">レッスン状況の見方</h3>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div>
-                <p className="font-semibold mb-1">📅 日付を選択すると...</p>
-                <ul className="list-disc list-inside space-y-1 text-muted-foreground ml-2">
-                  <li>その日のレッスン枠一覧が表示されます</li>
-                  <li>各枠の欠席者と振替予約者を確認できます</li>
-                  <li>受入可能人数の計算は自動で行われます</li>
-                </ul>
-              </div>
-              <div>
-                <p className="font-semibold mb-1">👥 表示される情報</p>
-                <ul className="list-disc list-inside space-y-1 text-muted-foreground ml-2">
-                  <li><strong>欠席者</strong>: このレッスンを欠席する生徒</li>
-                  <li><strong>振替予約者</strong>: 他のレッスンから振替でこのレッスンに参加する生徒</li>
-                  <li><strong>受入枠</strong>: 定員 - 通常参加者 + 欠席者 = 振替で受入可能な人数</li>
-                </ul>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <h3 className="text-lg font-semibold">自動処理について</h3>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div>
-                <p className="font-semibold mb-1">🔄 振替予約について</p>
-                <ul className="list-disc list-inside space-y-1 text-muted-foreground ml-2">
-                  <li>保護者は空き枠があるレッスンを選択して振替予約を行います</li>
-                  <li>確定時に保護者へメール通知が送信されます</li>
-                  <li>満席の枠は予約できません</li>
-                </ul>
-              </div>
-              <div>
-                <p className="font-semibold mb-1">⏰ 振替期限について</p>
-                <ul className="list-disc list-inside space-y-1 text-muted-foreground ml-2">
-                  <li>欠席日から30日以内に振替予約を行う必要があります</li>
-                  <li>振替予約はレッスン開始30分前まで可能です</li>
-                </ul>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <h3 className="text-lg font-semibold">保護者側の操作フロー</h3>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div className="space-y-2">
-                <p className="font-semibold">1️⃣ 欠席連絡の登録</p>
-                <p className="text-muted-foreground ml-4">トップページから欠席情報を入力して登録</p>
-
-                <p className="font-semibold">2️⃣ メールでリンク受信</p>
-                <p className="text-muted-foreground ml-4">登録したメールアドレスに専用の振替予約リンクが送信される</p>
-
-                <p className="font-semibold">3️⃣ 振替枠の検索・予約</p>
-                <p className="text-muted-foreground ml-4">メールのリンクから振替可能な枠を検索し、空きがあれば予約を確定</p>
-
-                <p className="font-semibold">4️⃣ 確認メール</p>
-                <p className="text-muted-foreground ml-4">振替予約が確定するとメール通知が届く</p>
-              </div>
-
-              <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                <p className="font-semibold text-yellow-800 mb-1">⚠️ 重要ポイント</p>
-                <ul className="list-disc list-inside text-yellow-700 space-y-1">
-                  <li>メールのリンクは<strong>専用トークン付き</strong>で、後からでもアクセス可能</li>
-                  <li>トークンなしではトップページから新規欠席登録しかできません</li>
-                  <li>保護者にはメールを保存するよう案内しています</li>
-                </ul>
-              </div>
-            </CardContent>
-          </Card>
-        </section>
       </main>
 
       <SlotDialog
