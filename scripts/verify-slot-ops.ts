@@ -1,7 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-const REQUIRED_SCRIPTS = ["slots:audit-time", "slots:repair-time"] as const;
+const REQUIRED_SCRIPTS = [
+  "slots:audit-id",
+  "slots:repair-id",
+  "slots:audit-time",
+  "slots:repair-time",
+] as const;
 
 type PackageJson = {
   scripts?: Record<string, string>;

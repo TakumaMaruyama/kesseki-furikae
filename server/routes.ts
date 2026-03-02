@@ -36,6 +36,7 @@ import {
   startOfJstDay,
 } from "@shared/jst";
 import { getActualCurrent, getRemainingCapacity, hasRemainingCapacity } from "@shared/capacity";
+import { buildCanonicalSlotId } from "@shared/slotId";
 
 // Admin authentication middleware
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -1701,11 +1702,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           throw new Error("BOOK_SLOT_FULL");
         }
 
-        const existingRequests = await tx.select().from(requests).where(eq(requests.toSlotId, data.toSlotId));
-        const duplicateRequest = existingRequests.find(
-          r => r.status === "確定" && r.childName === data.childName
-        );
-        if (duplicateRequest) {
+        const duplicateRequest = await tx.select({ id: requests.id }).from(requests).where(and(
+          eq(requests.status, "確定"),
+          eq(requests.childName, data.childName),
+          eq(requests.toSlotStartDateTime, slotStartDateTime),
+        ));
+        if (duplicateRequest.length > 0) {
           throw new Error("BOOK_DUPLICATE_CHILD");
         }
 
@@ -2282,7 +2284,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           for (const classBand of data.classBands) {
             const dateTime = parseJstDateTime(dateStr, data.startTime);
-            const slotId = `${dateStr}_${data.startTime}_${classBand === "初級" ? "shokyu" : classBand === "中級" ? "chukyu" : "jokyu"}`;
+            const slotId = buildCanonicalSlotId(dateStr, data.startTime, classBand);
 
             const existing = await storage.getClassSlotById(slotId);
             if (existing) {
@@ -2324,7 +2326,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         for (const classBand of data.classBands) {
           const dateTime = parseJstDateTime(dateStr, data.startTime);
-          const slotId = `${dateStr}_${data.startTime}_${classBand === "初級" ? "shokyu" : classBand === "中級" ? "chukyu" : "jokyu"}`;
+          const slotId = buildCanonicalSlotId(dateStr, data.startTime, classBand);
 
           const existing = await storage.getClassSlotById(slotId);
           if (existing) {
@@ -2374,6 +2376,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "指定された枠が見つかりません。" });
       }
 
+      const existingDateISO = formatJstDate(existing.date);
+      const targetDateISO = data.date || existingDateISO;
+      const targetStartTime = data.startTime || existing.startTime;
+      const targetClassBand = (data.classBand || existing.classBand) as "初級" | "中級" | "上級";
+      const targetSlotId = buildCanonicalSlotId(targetDateISO, targetStartTime, targetClassBand);
+      const keyFieldsChanged = targetSlotId !== existing.id;
+
       const updateData: any = {};
       if (data.date) updateData.date = parseJstDate(data.date);
       if (data.startTime) updateData.startTime = data.startTime;
@@ -2392,6 +2401,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (data.applyToFuture) {
+        if (keyFieldsChanged) {
+          throw new Error("UPDATE_SLOT_KEY_CHANGE_APPLY_TO_FUTURE_UNSUPPORTED");
+        }
+
         const currentDate = existing.date;
         const dayOfWeek = getJstDayOfWeek(currentDate);
 
@@ -2424,10 +2437,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
           count: updatedCount,
         });
       } else {
-        const updated = await storage.updateClassSlot(data.id, updateData);
-        res.json({ success: true, slot: updated });
+        if (!keyFieldsChanged) {
+          const updated = await storage.updateClassSlot(data.id, updateData);
+          return res.json({ success: true, slot: updated });
+        }
+
+        const replacementSlot = await db.transaction(async (tx) => {
+          const conflict = await tx
+            .select({ id: classSlots.id })
+            .from(classSlots)
+            .where(eq(classSlots.id, targetSlotId))
+            .limit(1);
+          if (conflict.length > 0) {
+            throw new Error("UPDATE_SLOT_ID_CONFLICT");
+          }
+
+          const [createdSlot] = await tx
+            .insert(classSlots)
+            .values({
+              id: targetSlotId,
+              date: updateData.date || existing.date,
+              startTime: updateData.startTime || existing.startTime,
+              courseLabel: updateData.courseLabel || existing.courseLabel,
+              classBand: updateData.classBand || existing.classBand,
+              isClosed: existing.isClosed,
+              capacityLimit: updateData.capacityLimit ?? existing.capacityLimit,
+              capacityCurrent: updateData.capacityCurrent ?? existing.capacityCurrent,
+              capacityMakeupUsed: existing.capacityMakeupUsed || 0,
+              waitlistCount: existing.waitlistCount || 0,
+              lessonStartDateTime: updateData.lessonStartDateTime || existing.lessonStartDateTime,
+              lastNotifiedRequestId: existing.lastNotifiedRequestId || null,
+              createdAt: existing.createdAt,
+              updatedAt: new Date(),
+            })
+            .returning();
+
+          if (!createdSlot) {
+            throw new Error("UPDATE_SLOT_REKEY_FAILED");
+          }
+
+          await tx
+            .update(requests)
+            .set({
+              toSlotId: targetSlotId,
+              toSlotStartDateTime: createdSlot.lessonStartDateTime,
+            })
+            .where(eq(requests.toSlotId, existing.id));
+
+          await tx
+            .update(absences)
+            .set({
+              originalSlotId: targetSlotId,
+              updatedAt: new Date(),
+            })
+            .where(eq(absences.originalSlotId, existing.id));
+
+          await tx
+            .update(closureEventSlots)
+            .set({ slotId: targetSlotId })
+            .where(eq(closureEventSlots.slotId, existing.id));
+
+          await tx.delete(classSlots).where(eq(classSlots.id, existing.id));
+
+          return createdSlot;
+        });
+
+        return res.json({ success: true, slot: replacementSlot });
       }
     } catch (error: any) {
+      if (error.message === "UPDATE_SLOT_ID_CONFLICT") {
+        return res.status(400).json({ error: "更新後の枠IDが既存枠と重複するため、更新できません。" });
+      }
+      if (error.message === "UPDATE_SLOT_KEY_CHANGE_APPLY_TO_FUTURE_UNSUPPORTED") {
+        return res.status(400).json({ error: "日付・時刻・クラス帯の変更と「以降に適用」は同時に実行できません。" });
+      }
       res.status(400).json({ error: error.message });
     }
   });

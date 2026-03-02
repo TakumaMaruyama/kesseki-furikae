@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { ja } from "date-fns/locale";
+import { parseSlotId as parseCanonicalSlotId } from "@shared/slotId";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,19 +23,22 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Link } from "wouter";
 
-function parseSlotId(slotId: string): { date: string; startTime: string } | null {
-  const parts = slotId.split('_');
-  if (parts.length >= 2) {
-    return { date: parts[0], startTime: parts[1] };
-  }
-  return null;
+function formatSlotDateTimeFromId(slotId: string): string {
+  const parsed = parseCanonicalSlotId(slotId);
+  if (!parsed) return slotId;
+  const date = parseISO(parsed.dateISO);
+  return `${format(date, "yyyy年M月d日(E)", { locale: ja })} ${parsed.startTime}`;
 }
 
-function formatSlotDateTime(slotId: string): string {
-  const parsed = parseSlotId(slotId);
-  if (!parsed) return slotId;
-  const date = parseISO(parsed.date);
-  return `${format(date, "yyyy年M月d日(E)", { locale: ja })} ${parsed.startTime}`;
+function formatRequestSlotDateTime(request: { toSlotId: string; toSlotStartDateTime?: string | null }): string {
+  if (request.toSlotStartDateTime) {
+    const slotTime = new Date(request.toSlotStartDateTime);
+    if (!Number.isNaN(slotTime.getTime())) {
+      return format(slotTime, "yyyy年M月d日(E) HH:mm", { locale: ja });
+    }
+  }
+
+  return formatSlotDateTimeFromId(request.toSlotId);
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -302,7 +306,7 @@ export default function StatusPage() {
                           </div>
                           <div className="text-sm mb-2">
                             <span className="text-muted-foreground">振替先:</span>{" "}
-                            {formatSlotDateTime(request.toSlotId)}
+                            {formatRequestSlotDateTime(request)}
                           </div>
                           {request.status === "確定" && (
                             <div className="mt-4">

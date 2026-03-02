@@ -1,34 +1,8 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { ja } from "date-fns/locale";
+import { parseSlotId as parseCanonicalSlotId } from "@shared/slotId";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-
-// データベースの日時文字列をタイムゾーン変換なしでパースする
-// "2025-12-22 18:00:00" → そのまま日本時間として解釈
-function parseDbDateTime(dateTimeStr: string): Date {
-  // スペース区切りをTに置換してISO形式に近づける
-  const isoLike = dateTimeStr.replace(' ', 'T');
-  // parseISOはタイムゾーン情報がない場合、ローカル時間として解釈する
-  return parseISO(isoLike);
-}
-
-// スロットIDから日付と時刻を抽出する
-// "2025-12-14_10:30_shokyu" → { date: "2025-12-14", startTime: "10:30" }
-function parseSlotId(slotId: string): { date: string; startTime: string } | null {
-  const parts = slotId.split('_');
-  if (parts.length >= 2) {
-    return { date: parts[0], startTime: parts[1] };
-  }
-  return null;
-}
-
-// スロットIDから表示用の日時文字列を生成
-function formatSlotDateTime(slotId: string): string {
-  const parsed = parseSlotId(slotId);
-  if (!parsed) return slotId;
-  const date = parseISO(parsed.date);
-  return `${format(date, "yyyy年M月d日(E)", { locale: ja })} ${parsed.startTime}`;
-}
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -50,6 +24,39 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
 import type { Child, Absence, Request as MakeupRequest, Course } from "@shared/schema";
+
+function parseSlotDateTimeFromId(slotId: string): Date | null {
+  const parsed = parseCanonicalSlotId(slotId);
+  if (!parsed) {
+    return null;
+  }
+
+  const date = parseISO(`${parsed.dateISO}T${parsed.startTime}:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function resolveRequestSlotDateTime(request: Pick<MakeupRequest, "toSlotId" | "toSlotStartDateTime">): Date | null {
+  if (request.toSlotStartDateTime) {
+    const slotDateTime = new Date(request.toSlotStartDateTime);
+    if (!Number.isNaN(slotDateTime.getTime())) {
+      return slotDateTime;
+    }
+  }
+
+  return parseSlotDateTimeFromId(request.toSlotId);
+}
+
+function formatRequestSlotDateTime(
+  request: Pick<MakeupRequest, "toSlotId" | "toSlotStartDateTime">,
+  pattern = "yyyy年M月d日(E) HH:mm",
+): string {
+  const slotDateTime = resolveRequestSlotDateTime(request);
+  if (!slotDateTime) {
+    return request.toSlotId;
+  }
+
+  return format(slotDateTime, pattern, { locale: ja });
+}
 
 type AbsenceWithSlot = Absence & {
   slotInfo?: {
@@ -269,7 +276,8 @@ function AbsenceHistorySection({
   // 振替予約がキャンセル可能かどうか
   const canCancelRequest = (request: MakeupRequest) => {
     if (request.status !== "確定") return false;
-    const slotTime = new Date(request.toSlotStartDateTime);
+    const slotTime = resolveRequestSlotDateTime(request);
+    if (!slotTime) return false;
     const now = new Date();
     return slotTime > now;
   };
@@ -337,7 +345,7 @@ function AbsenceHistorySection({
                             <StatusBadge status={activeRequest.status} />
                           </div>
                           <p className="text-sm">
-                            {format(new Date(activeRequest.toSlotStartDateTime), "yyyy年M月d日(E) HH:mm", { locale: ja })}
+                            {formatRequestSlotDateTime(activeRequest)}
                           </p>
                         </div>
                         {canCancelRequest(activeRequest) && (
@@ -358,7 +366,7 @@ function AbsenceHistorySection({
                               <AlertDialogHeader>
                                 <AlertDialogTitle>振替予約をキャンセル</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  {activeRequest.childName}さんの{format(new Date(activeRequest.toSlotStartDateTime), "M月d日(E) HH:mm", { locale: ja })}の振替予約をキャンセルしますか？
+                                  {activeRequest.childName}さんの{formatRequestSlotDateTime(activeRequest, "M月d日(E) HH:mm")}の振替予約をキャンセルしますか？
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
@@ -445,11 +453,11 @@ function RequestHistorySection({ requests, onCancel, isCancelling }: {
   isCancelling: boolean;
 }) {
   const sortedRequests = [...requests].sort((a, b) => {
-    const parsedA = parseSlotId(a.toSlotId);
-    const parsedB = parseSlotId(b.toSlotId);
-    if (!parsedA || !parsedB) return 0;
-    const timeA = new Date(`${parsedA.date}T${parsedA.startTime}:00`).getTime();
-    const timeB = new Date(`${parsedB.date}T${parsedB.startTime}:00`).getTime();
+    const slotDateTimeA = resolveRequestSlotDateTime(a);
+    const slotDateTimeB = resolveRequestSlotDateTime(b);
+    if (!slotDateTimeA || !slotDateTimeB) return 0;
+    const timeA = slotDateTimeA.getTime();
+    const timeB = slotDateTimeB.getTime();
     return timeB - timeA;
   });
 
@@ -458,9 +466,8 @@ function RequestHistorySection({ requests, onCancel, isCancelling }: {
 
   const canCancel = (request: MakeupRequest) => {
     if (request.status !== "確定") return false;
-    const parsed = parseSlotId(request.toSlotId);
-    if (!parsed) return false;
-    const slotTime = new Date(`${parsed.date}T${parsed.startTime}:00`);
+    const slotTime = resolveRequestSlotDateTime(request);
+    if (!slotTime) return false;
     const now = new Date();
     return slotTime > now;
   };
@@ -480,7 +487,7 @@ function RequestHistorySection({ requests, onCancel, isCancelling }: {
           <StatusBadge status={request.status} />
         </div>
         <p className="text-sm text-muted-foreground">
-          振替先: {formatSlotDateTime(request.toSlotId)}
+          振替先: {formatRequestSlotDateTime(request)}
         </p>
         <p className="text-xs text-muted-foreground">
           欠席日: {format(new Date(request.absentDate), "yyyy年M月d日", { locale: ja })}
@@ -503,7 +510,7 @@ function RequestHistorySection({ requests, onCancel, isCancelling }: {
             <AlertDialogHeader>
               <AlertDialogTitle>予約をキャンセル</AlertDialogTitle>
               <AlertDialogDescription>
-                {request.childName}さんの{formatSlotDateTime(request.toSlotId)}の振替予約をキャンセルしますか？
+                {request.childName}さんの{formatRequestSlotDateTime(request)}の振替予約をキャンセルしますか？
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
