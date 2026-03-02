@@ -10,6 +10,8 @@
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "ops:verify-slot-scripts": "tsx scripts/verify-slot-ops.ts",
+    "slots:audit-id": "tsx scripts/audit-slot-id-drift.ts",
+    "slots:repair-id": "tsx scripts/repair-slot-id-drift.ts",
     "slots:audit-time": "tsx scripts/audit-slot-time-drift.ts",
     "slots:repair-time": "tsx scripts/repair-slot-time-drift.ts",
     "slots:audit-attendance": "tsx scripts/audit-attendance-consistency.ts",
