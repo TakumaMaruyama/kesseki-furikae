@@ -22,6 +22,10 @@ function isClassBand(value: string): value is ClassBand {
     return value === "初級" || value === "中級" || value === "上級";
 }
 
+function formatJstDay(input: Date | string | number): string {
+    return format(parseJstDate(formatJstDate(input)), "M/d(E)", { locale: ja });
+}
+
 export function HistoryView() {
     const { toast } = useToast();
     const [historyTab, setHistoryTab] = useState<"absences" | "requests">("absences");
@@ -417,7 +421,7 @@ export function HistoryView() {
                                             <TableRow key={absence.id}>
                                                 <TableCell className="font-medium">{absence.childName}</TableCell>
                                                 <TableCell>{absence.declaredClassBand}</TableCell>
-                                                <TableCell>{format(new Date(absence.absentDate), "M/d(E)", { locale: ja })}</TableCell>
+                                                <TableCell>{formatJstDay(absence.absentDate)}</TableCell>
                                                 <TableCell>
                                                     {absence.courseLabel && absence.startTime
                                                         ? `${absence.courseLabel} ${absence.startTime}`
@@ -486,10 +490,10 @@ export function HistoryView() {
                                             <TableRow key={request.id}>
                                                 <TableCell className="font-medium">{request.childName}</TableCell>
                                                 <TableCell>{request.declaredClassBand}</TableCell>
-                                                <TableCell>{format(new Date(request.absentDate), "M/d(E)", { locale: ja })}</TableCell>
+                                                <TableCell>{formatJstDay(request.absentDate)}</TableCell>
                                                 <TableCell>
                                                     {request.toSlotDate && request.toSlotStartTime
-                                                        ? `${format(new Date(request.toSlotDate), "M/d(E)", { locale: ja })} ${request.toSlotStartTime}`
+                                                        ? `${format(parseJstDate(request.toSlotDate), "M/d(E)", { locale: ja })} ${request.toSlotStartTime}`
                                                         : "-"}
                                                 </TableCell>
                                                 <TableCell>{getStatusBadge(request.status)}</TableCell>

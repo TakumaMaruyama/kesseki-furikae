@@ -836,7 +836,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return {
             ...request,
             courseLabel: slot?.courseLabel || null,
-            toSlotDate: slot?.date || null,
+            toSlotDate: slot ? formatJstDate(slot.date) : null,
             toSlotStartTime: slot?.startTime || null,
           };
         })
