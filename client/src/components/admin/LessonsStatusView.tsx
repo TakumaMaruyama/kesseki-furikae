@@ -9,6 +9,11 @@ import { apiRequest } from "@/lib/queryClient";
 import { CheckCircleIcon, XCircleIcon, CalendarIcon } from "lucide-react";
 import type { LessonWithStatus, LessonStatus } from "./types";
 import { getActualCurrent, getRemainingCapacity } from "@shared/capacity";
+import { formatJstDate, parseJstDate } from "@shared/jst";
+
+function formatJstDay(input: Date | string | number, pattern: string): string {
+    return format(parseJstDate(formatJstDate(input)), pattern, { locale: ja });
+}
 
 export function LessonsStatusView() {
     const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -123,7 +128,7 @@ export function LessonsStatusView() {
                                     <div className="p-4 bg-muted/50 rounded-lg">
                                         <h3 className="font-semibold mb-2">{lessonStatus.slot.courseLabel}</h3>
                                         <p className="text-sm text-muted-foreground">
-                                            {format(new Date(lessonStatus.slot.date), "yyyy年M月d日(E)", { locale: ja })} {lessonStatus.slot.startTime}
+                                            {formatJstDay(lessonStatus.slot.date, "yyyy年M月d日(E)")} {lessonStatus.slot.startTime}
                                         </p>
                                         <div className="grid grid-cols-3 gap-2 mt-3 text-sm">
                                             <div>
@@ -180,7 +185,7 @@ export function LessonsStatusView() {
                                                     <div key={request.id} className="p-3 border rounded-lg">
                                                         <p className="font-medium">{request.childName}</p>
                                                         <p className="text-xs text-muted-foreground">
-                                                            欠席日: {format(new Date(request.absentDate), "M月d日", { locale: ja })}
+                                                            欠席日: {formatJstDay(request.absentDate, "M月d日")}
                                                         </p>
                                                     </div>
                                                 ))}
