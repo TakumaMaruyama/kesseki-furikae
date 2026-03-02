@@ -654,6 +654,12 @@ export default function ParentPage() {
                       <p>お子様の名前: <span className="font-medium text-foreground">{absenceData.childName}</span></p>
                       <p>クラス帯: <span className="font-medium text-foreground">{absenceData.declaredClassBand}</span></p>
                       <p>欠席日: <span className="font-medium text-foreground">{format(parseLocalDate(absenceData.absentDate), "yyyy年M月d日(E)", { locale: ja })}</span></p>
+                      <p>
+                        確認コード:{" "}
+                        <span className="font-mono font-semibold tracking-[0.12em] text-foreground" data-testid="text-absence-confirm-code">
+                          {absenceData.confirmCode || "-"}
+                        </span>
+                      </p>
                       <p>振替期限: <span className="font-medium text-foreground">{format(parseLocalDate(absenceData.makeupDeadline), "yyyy年M月d日", { locale: ja })}</span></p>
                     </div>
                   </div>
@@ -806,7 +812,7 @@ export default function ParentPage() {
                                     <SelectContent>
                                       {selectableOptions.map((slot) => (
                                         <SelectItem key={slot.id} value={slot.id}>
-                                          {slot.date} {slot.startTime} - {slot.courseLabel}（{slot.classBand}）
+                                          {slot.startTime} - {slot.courseLabel}（{slot.classBand}）
                                         </SelectItem>
                                       ))}
                                     </SelectContent>
@@ -1204,7 +1210,7 @@ export default function ParentPage() {
       </main>
 
 
-      <Dialog open={showConfirmCodeDialog} onOpenChange={setShowConfirmCodeDialog}>
+      <Dialog open={showConfirmCodeDialog} onOpenChange={setShowConfirmCodeDialog} modal={false}>
         <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-center text-xl">欠席連絡を受け付けました</DialogTitle>

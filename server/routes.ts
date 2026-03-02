@@ -1555,6 +1555,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         originalSlotId: absence.originalSlotId,
         contactEmail: absence.contactEmail,
         reason: absence.reason,
+        confirmCode: absence.confirmCode,
         sourceType: absence.sourceType,
         closureEventId: absence.closureEventId,
         makeupDeadline: formatJstDate(absence.makeupDeadline),

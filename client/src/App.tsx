@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -43,6 +44,53 @@ function AppContent() {
   const [location] = useLocation();
   const isAdmin = location === "/admin";
   const isStatus = location === "/status";
+
+  useEffect(() => {
+    const hasOpenModal = () => {
+      return !!document.querySelector(
+        '[role="dialog"][data-state="open"],[role="alertdialog"][data-state="open"]',
+      );
+    };
+
+    // Guard for iOS/PWA cases where dialog close can leave the page non-interactive.
+    const repairInteractionLock = () => {
+      if (hasOpenModal()) return;
+
+      const html = document.documentElement;
+      const body = document.body;
+
+      if (html.style.pointerEvents === "none") {
+        html.style.pointerEvents = "";
+      }
+      if (body.style.pointerEvents === "none") {
+        body.style.pointerEvents = "";
+      }
+      if (html.hasAttribute("inert")) {
+        html.removeAttribute("inert");
+      }
+      if (body.hasAttribute("inert")) {
+        body.removeAttribute("inert");
+      }
+    };
+
+    const handleWake = () => {
+      window.requestAnimationFrame(repairInteractionLock);
+    };
+
+    window.addEventListener("pageshow", handleWake);
+    window.addEventListener("focus", handleWake);
+    document.addEventListener("visibilitychange", handleWake);
+    const intervalId = window.setInterval(repairInteractionLock, 2000);
+
+    handleWake();
+
+    return () => {
+      window.removeEventListener("pageshow", handleWake);
+      window.removeEventListener("focus", handleWake);
+      document.removeEventListener("visibilitychange", handleWake);
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   return (
     <>
