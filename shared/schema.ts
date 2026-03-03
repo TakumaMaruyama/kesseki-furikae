@@ -220,6 +220,28 @@ export const insertRequestSchema = createInsertSchema(requests).omit({
 export type InsertRequest = z.infer<typeof insertRequestSchema>;
 export type Request = typeof requests.$inferSelect;
 
+// Trial participants (admin-managed)
+export const trialParticipants = pgTable("trial_participants", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  participantName: varchar("participant_name").notNull(),
+  grade: varchar("grade").notNull(),
+  swimLevel: varchar("swim_level").notNull(),
+  slotId: varchar("slot_id").notNull().references(() => classSlots.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("IDX_trial_participants_slot_id").on(table.slotId),
+  index("IDX_trial_participants_created_at").on(table.createdAt),
+]);
+
+export const insertTrialParticipantSchema = createInsertSchema(trialParticipants).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertTrialParticipant = z.infer<typeof insertTrialParticipantSchema>;
+export type TrialParticipant = typeof trialParticipants.$inferSelect;
+
 // Holidays
 export const holidays = pgTable("holidays", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -411,6 +433,29 @@ export const deleteSlotRequestSchema = z.object({
   id: z.string(),
 });
 
+const trialParticipantFieldSchema = z.string().trim().min(1).max(100);
+
+export const createTrialParticipantRequestSchema = z.object({
+  participantName: trialParticipantFieldSchema,
+  grade: trialParticipantFieldSchema,
+  swimLevel: trialParticipantFieldSchema,
+  slotId: z.string().trim().min(1, "参加枠を選択してください"),
+});
+
+export const updateTrialParticipantRequestSchema = z.object({
+  participantName: trialParticipantFieldSchema.optional(),
+  grade: trialParticipantFieldSchema.optional(),
+  swimLevel: trialParticipantFieldSchema.optional(),
+  slotId: z.string().trim().min(1, "参加枠を選択してください").optional(),
+}).refine((value) => (
+  value.participantName !== undefined ||
+  value.grade !== undefined ||
+  value.swimLevel !== undefined ||
+  value.slotId !== undefined
+), {
+  message: "更新項目を指定してください",
+});
+
 export const cancelAbsenceRequestSchema = z.object({
   resumeToken: z.string(),
 });
@@ -489,6 +534,8 @@ export type UpdateSlotCapacityRequest = z.infer<typeof updateSlotCapacityRequest
 export type CreateSlotRequest = z.infer<typeof createSlotRequestSchema>;
 export type UpdateSlotRequest = z.infer<typeof updateSlotRequestSchema>;
 export type DeleteSlotRequest = z.infer<typeof deleteSlotRequestSchema>;
+export type CreateTrialParticipantRequest = z.infer<typeof createTrialParticipantRequestSchema>;
+export type UpdateTrialParticipantRequest = z.infer<typeof updateTrialParticipantRequestSchema>;
 export type CancelAbsenceRequest = z.infer<typeof cancelAbsenceRequestSchema>;
 export type CancelRequest = z.infer<typeof cancelRequestSchema>;
 export type CreateChildRequest = z.infer<typeof createChildRequestSchema>;

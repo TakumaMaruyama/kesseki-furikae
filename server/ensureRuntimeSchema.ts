@@ -29,6 +29,17 @@ const COMPAT_MIGRATION_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS IDX_closure_event_slots_event_id ON closure_event_slots (closure_event_id)`,
   `CREATE INDEX IF NOT EXISTS IDX_closure_event_slots_slot_id ON closure_event_slots (slot_id)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS UQ_closure_event_slots_event_slot ON closure_event_slots (closure_event_id, slot_id)`,
+  `CREATE TABLE IF NOT EXISTS trial_participants (
+    id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+    participant_name varchar NOT NULL,
+    grade varchar NOT NULL,
+    swim_level varchar NOT NULL,
+    slot_id varchar NOT NULL REFERENCES class_slots(id) ON DELETE cascade,
+    created_at timestamp DEFAULT now(),
+    updated_at timestamp DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS IDX_trial_participants_slot_id ON trial_participants (slot_id)`,
+  `CREATE INDEX IF NOT EXISTS IDX_trial_participants_created_at ON trial_participants (created_at)`,
   `DO $$
   BEGIN
     IF NOT EXISTS (

@@ -26,6 +26,15 @@ function formatJstDay(input: Date | string | number): string {
     return format(parseJstDate(formatJstDate(input)), "M/d(E)", { locale: ja });
 }
 
+function parseRequestCreatedAt(value: string | null | undefined): number | null {
+    if (!value) {
+        return null;
+    }
+
+    const timestamp = new Date(value).getTime();
+    return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 export function HistoryView() {
     const { toast } = useToast();
     const [historyTab, setHistoryTab] = useState<"absences" | "requests">("absences");
@@ -328,9 +337,27 @@ export function HistoryView() {
         a.childName.toLowerCase().includes(searchTerm.toLowerCase())
     ) || [];
 
-    const filteredRequests = requests?.filter(r =>
+    const filteredRequests = (requests?.filter(r =>
         r.childName.toLowerCase().includes(searchTerm.toLowerCase())
-    ) || [];
+    ) || []).slice().sort((a, b) => {
+        const aCreatedAt = parseRequestCreatedAt(a.createdAt);
+        const bCreatedAt = parseRequestCreatedAt(b.createdAt);
+
+        if (aCreatedAt === null && bCreatedAt === null) {
+            return b.id.localeCompare(a.id);
+        }
+        if (aCreatedAt === null) {
+            return 1;
+        }
+        if (bCreatedAt === null) {
+            return -1;
+        }
+        if (aCreatedAt !== bCreatedAt) {
+            return bCreatedAt - aCreatedAt;
+        }
+
+        return b.id.localeCompare(a.id);
+    });
 
     const getStatusBadge = (status: string) => {
         switch (status) {

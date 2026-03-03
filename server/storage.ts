@@ -5,6 +5,7 @@ import {
   classSlots,
   absences,
   requests,
+  trialParticipants,
   holidays,
   globalSettings,
   adminCredentials,
@@ -20,6 +21,8 @@ import {
   type InsertAbsence,
   type Request,
   type InsertRequest,
+  type TrialParticipant,
+  type InsertTrialParticipant,
   type Holiday,
   type InsertHoliday,
   type GlobalSettings,
@@ -27,6 +30,20 @@ import {
 import { addJstDays, endOfJstDay, formatJstDate, parseJstDateTime, startOfJstDay } from "@shared/jst";
 import { db } from "./db";
 import { eq, and, gte, lte, lt, asc, desc, sql } from "drizzle-orm";
+
+export type TrialParticipantWithSlot = {
+  id: string;
+  participantName: string;
+  grade: string;
+  swimLevel: string;
+  slotId: string;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+  startTime: string;
+  courseLabel: string;
+  classBand: string;
+  slotDate: Date;
+};
 
 export interface IStorage {
   // User operations (required for Replit Auth and local auth)
@@ -92,6 +109,13 @@ export interface IStorage {
   createRequest(data: InsertRequest): Promise<Request>;
   updateRequest(id: string, data: Partial<InsertRequest>): Promise<Request | undefined>;
   deleteRequest(id: string): Promise<boolean>;
+
+  // Trial participant operations
+  getTrialParticipantsByDate(date: Date): Promise<TrialParticipantWithSlot[]>;
+  getTrialParticipantById(id: string): Promise<TrialParticipant | undefined>;
+  createTrialParticipant(data: InsertTrialParticipant): Promise<TrialParticipant>;
+  updateTrialParticipant(id: string, data: Partial<InsertTrialParticipant>): Promise<TrialParticipant | undefined>;
+  deleteTrialParticipant(id: string): Promise<boolean>;
 
   // Holiday operations
   getAllHolidays(): Promise<Holiday[]>;
@@ -480,6 +504,64 @@ export class DatabaseStorage implements IStorage {
 
   async deleteRequest(id: string): Promise<boolean> {
     const result = await db.delete(requests).where(eq(requests.id, id)).returning();
+    return result.length > 0;
+  }
+
+  // Trial participant operations
+  async getTrialParticipantsByDate(date: Date): Promise<TrialParticipantWithSlot[]> {
+    const dayStart = startOfJstDay(date);
+    const nextDay = addJstDays(dayStart, 1);
+
+    return db
+      .select({
+        id: trialParticipants.id,
+        participantName: trialParticipants.participantName,
+        grade: trialParticipants.grade,
+        swimLevel: trialParticipants.swimLevel,
+        slotId: trialParticipants.slotId,
+        createdAt: trialParticipants.createdAt,
+        updatedAt: trialParticipants.updatedAt,
+        startTime: classSlots.startTime,
+        courseLabel: classSlots.courseLabel,
+        classBand: classSlots.classBand,
+        slotDate: classSlots.date,
+      })
+      .from(trialParticipants)
+      .innerJoin(classSlots, eq(trialParticipants.slotId, classSlots.id))
+      .where(and(
+        gte(classSlots.date, dayStart),
+        lt(classSlots.date, nextDay),
+      ))
+      .orderBy(asc(classSlots.startTime), asc(trialParticipants.participantName), asc(trialParticipants.createdAt));
+  }
+
+  async getTrialParticipantById(id: string): Promise<TrialParticipant | undefined> {
+    const [participant] = await db.select().from(trialParticipants).where(eq(trialParticipants.id, id));
+    return participant;
+  }
+
+  async createTrialParticipant(data: InsertTrialParticipant): Promise<TrialParticipant> {
+    const [participant] = await db
+      .insert(trialParticipants)
+      .values({
+        ...data,
+        id: sql`gen_random_uuid()`,
+      })
+      .returning();
+    return participant;
+  }
+
+  async updateTrialParticipant(id: string, data: Partial<InsertTrialParticipant>): Promise<TrialParticipant | undefined> {
+    const [participant] = await db
+      .update(trialParticipants)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(trialParticipants.id, id))
+      .returning();
+    return participant;
+  }
+
+  async deleteTrialParticipant(id: string): Promise<boolean> {
+    const result = await db.delete(trialParticipants).where(eq(trialParticipants.id, id)).returning();
     return result.length > 0;
   }
 

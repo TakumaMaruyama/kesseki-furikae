@@ -2,8 +2,8 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
-import { classSlots, absences, requests, closureEvents, closureEventSlots } from "@shared/schema";
-import { eq, and, gte, lte, lt, asc, inArray, sql } from "drizzle-orm";
+import { classSlots, absences, requests, trialParticipants, closureEvents, closureEventSlots } from "@shared/schema";
+import { eq, and, gte, lte, lt, asc, desc, inArray, sql } from "drizzle-orm";
 import {
   createAbsencesBatchRequestSchema,
   createClosureEventRequestSchema,
@@ -16,6 +16,8 @@ import {
   createAbsenceRequestSchema,
   createCourseRequestSchema,
   updateCourseRequestSchema,
+  createTrialParticipantRequestSchema,
+  updateTrialParticipantRequestSchema,
   updateClosureEventSlotsRequestSchema,
   validateClosureCodeRequestSchema,
   redeemClosureCodeRequestSchema,
@@ -827,7 +829,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin: Get all requests for history view
   app.get("/api/admin/requests", requireAdmin, async (req, res) => {
     try {
-      const allRequests = await db.select().from(requests).orderBy(asc(requests.createdAt));
+      const allRequests = await db.select().from(requests).orderBy(desc(requests.createdAt));
 
       // Enrich with slot info
       const enrichedRequests = await Promise.all(
@@ -1085,10 +1087,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { date } = req.query;
 
-      // Use today's date if not specified
-      const targetDate = date && typeof date === 'string'
-        ? new Date(date + "T00:00:00")
-        : (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
+      const targetDate = date && typeof date === "string"
+        ? parseJstDate(date)
+        : startOfJstDay(new Date());
 
       // Get all slots for the target date
       const slots = await storage.getClassSlotsByDate(targetDate);
@@ -1133,7 +1134,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Sort by startTime, then by childName
+      const trialParticipantsForDate = await storage.getTrialParticipantsByDate(targetDate);
+      const dailyTrialParticipants = trialParticipantsForDate.map((participant) => ({
+        id: participant.id,
+        participantName: participant.participantName,
+        grade: participant.grade,
+        swimLevel: participant.swimLevel,
+        slotId: participant.slotId,
+        courseLabel: participant.courseLabel,
+        classBand: participant.classBand,
+        startTime: participant.startTime,
+      }));
+
+      // Sort by startTime, then by name
       const sortFn = (a: any, b: any) => {
         const timeCompare = a.startTime.localeCompare(b.startTime);
         if (timeCompare !== 0) return timeCompare;
@@ -1142,15 +1155,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       absentees.sort(sortFn);
       makeups.sort(sortFn);
+      dailyTrialParticipants.sort((a, b) => {
+        const timeCompare = a.startTime.localeCompare(b.startTime);
+        if (timeCompare !== 0) return timeCompare;
+        return a.participantName.localeCompare(b.participantName, "ja");
+      });
 
       res.json({
-        date: format(targetDate, "yyyy-MM-dd"),
+        date: formatJstDate(targetDate),
         absentees,
         makeups,
+        trialParticipants: dailyTrialParticipants,
       });
     } catch (error: any) {
       console.error("Daily status error:", error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/admin/trial-participants", requireAdmin, async (req, res) => {
+    try {
+      const data = createTrialParticipantRequestSchema.parse(req.body);
+
+      const slot = await storage.getClassSlotById(data.slotId);
+      if (!slot) {
+        return res.status(400).json({ error: "指定された参加枠が見つかりません。" });
+      }
+
+      const created = await storage.createTrialParticipant(data);
+      res.json({ success: true, trialParticipant: created });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.put("/api/admin/trial-participants/:id", requireAdmin, async (req, res) => {
+    try {
+      const id = req.params.id;
+      const data = updateTrialParticipantRequestSchema.parse(req.body);
+
+      const existing = await storage.getTrialParticipantById(id);
+      if (!existing) {
+        return res.status(404).json({ error: "指定された体験者が見つかりません。" });
+      }
+
+      if (data.slotId) {
+        const slot = await storage.getClassSlotById(data.slotId);
+        if (!slot) {
+          return res.status(400).json({ error: "指定された参加枠が見つかりません。" });
+        }
+      }
+
+      const updated = await storage.updateTrialParticipant(id, data);
+      if (!updated) {
+        return res.status(404).json({ error: "指定された体験者が見つかりません。" });
+      }
+
+      res.json({ success: true, trialParticipant: updated });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/admin/trial-participants/:id", requireAdmin, async (req, res) => {
+    try {
+      const id = req.params.id;
+      const deleted = await storage.deleteTrialParticipant(id);
+
+      if (!deleted) {
+        return res.status(404).json({ error: "指定された体験者が見つかりません。" });
+      }
+
+      res.json({ success: true, message: "体験者情報を削除しました。" });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
     }
   });
 
@@ -2496,6 +2574,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .update(closureEventSlots)
             .set({ slotId: targetSlotId })
             .where(eq(closureEventSlots.slotId, existing.id));
+
+          await tx
+            .update(trialParticipants)
+            .set({
+              slotId: targetSlotId,
+              updatedAt: new Date(),
+            })
+            .where(eq(trialParticipants.slotId, existing.id));
 
           await tx.delete(classSlots).where(eq(classSlots.id, existing.id));
 
