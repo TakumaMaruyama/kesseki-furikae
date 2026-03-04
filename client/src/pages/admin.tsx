@@ -204,11 +204,22 @@ export default function AdminPage() {
   });
 
   const deleteSlotMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("POST", "/api/admin/delete-slot", { id }),
-    onSuccess: () => {
+    mutationFn: (payload: { id: string; applyToFuture?: boolean }) =>
+      apiRequest("POST", "/api/admin/delete-slot", payload),
+    onSuccess: (response: any, variables) => {
+      const skipped = response?.skipped ?? 0;
+      const count = response?.count ?? (variables.applyToFuture ? 0 : 1);
+      let description = variables.applyToFuture
+        ? `${count}件の枠を削除しました。`
+        : "枠を削除しました。";
+
+      if (variables.applyToFuture && skipped > 0) {
+        description += `（${skipped}件は欠席登録があるためスキップされました）`;
+      }
+
       toast({
         title: "削除完了",
-        description: "枠を削除しました。",
+        description,
       });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/slots"] });
     },
@@ -461,15 +472,25 @@ export default function AdminPage() {
 
   const confirmAndDeleteSlot = async (slot: ClassSlot) => {
     try {
-      const { count, confirmedCount } = await fetchSlotRequestsCount(slot.id);
+      const applyToFuture = confirm(
+        "削除範囲を選択してください。\n\nOK: この日以降の同一枠（同曜日・同時刻・同クラス帯・同コース名）も削除\nキャンセル: この枠のみ削除"
+      );
 
       let message = `${slot.courseLabel}の枠を削除しますか？`;
-      if (count > 0) {
-        message = `${slot.courseLabel}の枠を削除しますか？\n\n※この枠には${count}件の申し込みがあります（確定${confirmedCount}件）。削除すると申し込みも全て削除されます。`;
+      if (applyToFuture) {
+        message = `${slot.courseLabel}の枠と、この日以降の同一枠を削除しますか？\n\n※欠席登録がある枠はスキップされます。\n※対象枠にある申し込みはすべて削除されます。`;
+      } else {
+        const { count, confirmedCount } = await fetchSlotRequestsCount(slot.id);
+        if (count > 0) {
+          message = `${slot.courseLabel}の枠を削除しますか？\n\n※この枠には${count}件の申し込みがあります（確定${confirmedCount}件）。削除すると申し込みも全て削除されます。`;
+        }
       }
 
       if (confirm(message)) {
-        deleteSlotMutation.mutate(slot.id);
+        deleteSlotMutation.mutate({
+          id: slot.id,
+          applyToFuture,
+        });
       }
     } catch (error: any) {
       toast({
