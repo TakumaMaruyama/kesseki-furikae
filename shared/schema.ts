@@ -162,6 +162,7 @@ export const absences = pgTable("absences", {
   childId: varchar("child_id"),
   childName: varchar("child_name").notNull(),
   declaredClassBand: varchar("declared_class_band").notNull(),
+  reportType: varchar("report_type").notNull().default("ABSENCE"),
   absentDate: timestamp("absent_date").notNull(),
   originalSlotId: varchar("original_slot_id").notNull(),
   contactEmail: varchar("contact_email"),
@@ -280,6 +281,7 @@ export const absenceSchema = z.object({
   childId: z.string().nullable(),
   childName: z.string(),
   declaredClassBand: z.enum(["初級", "中級", "上級"]),
+  reportType: z.enum(["ABSENCE", "LATE"]),
   absentDate: z.date(),
   originalSlotId: z.string(),
   contactEmail: z.string().email().nullable(),
@@ -308,11 +310,13 @@ export const absenceEntrySchema = z.object({
 });
 
 export const createAbsenceRequestSchema = absenceEntrySchema.extend({
+  reportType: z.enum(["ABSENCE", "LATE"]).default("ABSENCE"),
   contactEmail: z.string().email("正しいメールアドレスを入力してください").optional().or(z.literal("")),
   reason: z.string().trim().max(200, "理由は200文字以内で入力してください").optional(),
 });
 
 export const createAbsencesBatchRequestSchema = z.object({
+  reportType: z.enum(["ABSENCE", "LATE"]).default("ABSENCE"),
   items: z.array(absenceEntrySchema)
     .min(1, "少なくとも1名分の欠席情報を入力してください")
     .max(5, "一度に登録できるのは5名までです"),

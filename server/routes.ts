@@ -83,9 +83,12 @@ type AbsenceEntryInput = {
   originalSlotId: string;
 };
 
+type ReportType = "ABSENCE" | "LATE";
+
 type CreateAbsenceInternalOptions = {
   contactEmail: string | null;
   reason: string | null;
+  reportType: ReportType;
   sourceType: "NORMAL" | "CLOSURE_CODE";
   closureEventId: string | null;
   enforceBeforeStart: boolean;
@@ -101,6 +104,7 @@ type CreatedAbsenceInternal = {
   childName: string;
   declaredClassBand: "初級" | "中級" | "上級";
   absentDateISO: string;
+  reportType: ReportType;
   originalSlot: typeof classSlots.$inferSelect;
 };
 
@@ -209,6 +213,7 @@ async function createAbsenceRecordInTransaction(
     childId: entry.childId || null,
     childName: entry.childName,
     declaredClassBand: entry.declaredClassBand,
+    reportType: options.reportType,
     absentDate,
     originalSlotId: entry.originalSlotId,
     contactEmail: options.contactEmail,
@@ -221,7 +226,7 @@ async function createAbsenceRecordInTransaction(
     makeupStatus: "PENDING",
   });
 
-  if (options.decrementOriginalSlotCurrent) {
+  if (options.decrementOriginalSlotCurrent && options.sourceType === "NORMAL" && options.reportType === "ABSENCE") {
     await tx
       .update(classSlots)
       .set({
@@ -239,6 +244,7 @@ async function createAbsenceRecordInTransaction(
     childName: entry.childName,
     declaredClassBand: entry.declaredClassBand,
     absentDateISO: entry.absentDateISO,
+    reportType: options.reportType,
     originalSlot,
   };
 }
@@ -275,6 +281,7 @@ async function cancelAbsenceWithRelated(absenceId: string, options: CancelAbsenc
     if (!absence) {
       throw new Error("NOT_FOUND_ABSENCE");
     }
+    const shouldRestoreOriginalSlotCurrent = absence.sourceType === "NORMAL" && absence.reportType === "ABSENCE";
 
     if (isAbsenceCancelledStatus(absence.makeupStatus)) {
       if (absence.makeupStatus !== "CANCELLED") {
@@ -290,7 +297,7 @@ async function cancelAbsenceWithRelated(absenceId: string, options: CancelAbsenc
       };
     }
 
-    if (options.enforceGraceRule && !isWithinAbsenceGracePeriod(absence.createdAt)) {
+    if (shouldRestoreOriginalSlotCurrent && options.enforceGraceRule && !isWithinAbsenceGracePeriod(absence.createdAt)) {
       const [originalSlot] = await tx.select().from(classSlots).where(eq(classSlots.id, absence.originalSlotId));
       if (!originalSlot) {
         throw new Error("ORIGINAL_SLOT_NOT_FOUND");
@@ -349,13 +356,15 @@ async function cancelAbsenceWithRelated(absenceId: string, options: CancelAbsenc
       }
     }
 
-    await tx
-      .update(classSlots)
-      .set({
-        capacityCurrent: sql`${classSlots.capacityCurrent} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(eq(classSlots.id, absence.originalSlotId));
+    if (shouldRestoreOriginalSlotCurrent) {
+      await tx
+        .update(classSlots)
+        .set({
+          capacityCurrent: sql`${classSlots.capacityCurrent} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(classSlots.id, absence.originalSlotId));
+    }
 
     return {
       childName: absence.childName,
@@ -780,7 +789,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const status = await getSlotAbsencesAndMakeups(slot.id);
           return {
             ...slot,
-            absenceCount: status?.absences.length || 0,
+            absenceCount: status?.absences.filter((absence) => absence.reportType === "ABSENCE").length || 0,
             makeupCount: status?.makeupRequests.length || 0,
           };
         })
@@ -1059,13 +1068,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       for (const slot of todaySlots) {
         const slotAbsences = await storage.getAbsencesByOriginalSlotId(slot.id);
         const slotMakeups = await storage.getConfirmedRequestsBySlotId(slot.id);
-        todayAbsences += slotAbsences.length;
+        todayAbsences += slotAbsences.filter((absence) => absence.reportType === "ABSENCE").length;
         todayMakeups += slotMakeups.length;
       }
 
       // Get total pending absences (makeup not yet confirmed)
       const allAbsences = await storage.getAllAbsences();
-      const pendingAbsences = allAbsences.filter(a => a.makeupStatus === "PENDING").length;
+      const pendingAbsences = allAbsences.filter(a => a.makeupStatus === "PENDING" && a.reportType === "ABSENCE").length;
 
       // Get future slots count
       const futureSlots = await storage.countFutureSlots();
@@ -1100,6 +1109,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         courseLabel: string;
         classBand: string;
         startTime: string;
+        reportType: "ABSENCE" | "LATE";
       }> = [];
 
       // Collect makeups (students transferring TO this date's lessons)
@@ -1119,6 +1129,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             courseLabel: slot.courseLabel,
             classBand: slot.classBand,
             startTime: slot.startTime,
+            reportType: absence.reportType as "ABSENCE" | "LATE",
           });
         }
 
@@ -1348,6 +1359,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           created.declaredClassBand,
           format(parseJstDate(created.absentDateISO), "yyyy年M月d日"),
           format(created.makeupDeadline, "yyyy年M月d日"),
+          created.reportType,
           created.resumeToken,
           created.absenceId,
           created.originalSlot.courseLabel,
@@ -1463,6 +1475,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const item = await createAbsenceRecordInTransaction(tx, row, {
               contactEmail,
               reason,
+              reportType: "ABSENCE",
               sourceType: "CLOSURE_CODE",
               closureEventId: event.id,
               enforceBeforeStart: false,
@@ -1510,6 +1523,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           childName: item.childName,
           declaredClassBand: item.declaredClassBand,
           absentDateISO: item.absentDateISO,
+          reportType: item.reportType,
         })),
       });
     } catch (error: any) {
@@ -1528,6 +1542,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const data = createAbsencesBatchRequestSchema.parse(req.body);
       const contactEmail = normalizeOptionalEmail(data.contactEmail);
       const reason = normalizeOptionalText(data.reason);
+      const reportType = data.reportType;
 
       const slotCount = await storage.countFutureSlots();
       if (slotCount === 0) {
@@ -1542,6 +1557,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const item = await createAbsenceRecordInTransaction(tx, row, {
               contactEmail,
               reason,
+              reportType,
               sourceType: "NORMAL",
               closureEventId: null,
               enforceBeforeStart: true,
@@ -1567,6 +1583,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           childName: item.childName,
           declaredClassBand: item.declaredClassBand,
           absentDateISO: item.absentDateISO,
+          reportType: item.reportType,
         })),
       });
     } catch (error: any) {
@@ -1585,6 +1602,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const data = createAbsenceRequestSchema.parse(req.body);
       const contactEmail = normalizeOptionalEmail(data.contactEmail);
       const reason = normalizeOptionalText(data.reason);
+      const reportType = data.reportType;
 
       const slotCount = await storage.countFutureSlots();
       if (slotCount === 0) {
@@ -1595,6 +1613,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const item = await createAbsenceRecordInTransaction(tx, data, {
           contactEmail,
           reason,
+          reportType,
           sourceType: "NORMAL",
           closureEventId: null,
           enforceBeforeStart: true,
@@ -1611,6 +1630,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         resumeToken: created.resumeToken,
         confirmCode: created.confirmCode,
         makeupDeadline: formatJstDate(created.makeupDeadline),
+        reportType: created.reportType,
       });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -1630,6 +1650,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         id: absence.id,
         childName: absence.childName,
         declaredClassBand: absence.declaredClassBand,
+        reportType: absence.reportType,
         absentDate: formatJstDate(absence.absentDate),
         originalSlotId: absence.originalSlotId,
         contactEmail: absence.contactEmail,
@@ -1800,6 +1821,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (isAbsenceCancelledStatus(absence.makeupStatus)) {
             throw new Error("BOOK_ABSENCE_CANCELLED");
           }
+          if (absence.reportType === "LATE") {
+            throw new Error("BOOK_LATE_NOT_BOOKABLE");
+          }
           if (absence.makeupStatus !== "PENDING") {
             throw new Error("BOOK_ABSENCE_NOT_PENDING");
           }
@@ -1925,6 +1949,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       if (error.message === "BOOK_ABSENCE_CANCELLED") {
         return res.status(400).json({ success: false, message: "キャンセル済みの欠席連絡では予約できません。" });
+      }
+      if (error.message === "BOOK_LATE_NOT_BOOKABLE") {
+        return res.status(400).json({ success: false, message: "遅刻連絡では振替予約できません。" });
       }
       if (error.message === "BOOK_ABSENCE_NOT_PENDING") {
         return res.status(400).json({ success: false, message: "この欠席連絡は現在予約可能な状態ではありません。" });

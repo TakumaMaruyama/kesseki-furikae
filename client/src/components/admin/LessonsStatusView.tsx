@@ -150,7 +150,7 @@ export function LessonsStatusView() {
                                         <div>
                                             <h4 className="font-semibold mb-3 text-destructive flex items-center gap-2">
                                                 <XCircleIcon className="w-4 h-4" />
-                                                欠席者 ({lessonStatus.absences.length}名)
+                                                欠席・遅刻者 ({lessonStatus.absences.length}名)
                                             </h4>
                                             <div className="space-y-2">
                                                 {lessonStatus.absences.map((absence) => (
@@ -166,7 +166,11 @@ export function LessonsStatusView() {
                                                             </p>
                                                         )}
                                                         <Badge variant="outline" className="mt-1 text-xs">
-                                                            {absence.makeupStatus === 'MAKEUP_CONFIRMED' ? '振替済み' : '振替待ち'}
+                                                            {absence.reportType === "LATE"
+                                                                ? "遅刻連絡"
+                                                                : absence.makeupStatus === 'MAKEUP_CONFIRMED'
+                                                                    ? '振替済み'
+                                                                    : '振替待ち'}
                                                         </Badge>
                                                     </div>
                                                 ))}

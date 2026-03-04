@@ -35,6 +35,13 @@ function parseRequestCreatedAt(value: string | null | undefined): number | null 
     return Number.isFinite(timestamp) ? timestamp : null;
 }
 
+function getAbsenceReportTypeBadge(reportType: "ABSENCE" | "LATE") {
+    if (reportType === "LATE") {
+        return <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300">遅刻</Badge>;
+    }
+    return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-300">欠席</Badge>;
+}
+
 export function HistoryView() {
     const { toast } = useToast();
     const [historyTab, setHistoryTab] = useState<"absences" | "requests">("absences");
@@ -183,7 +190,11 @@ export function HistoryView() {
     });
 
     const handleCancelAbsence = (absence: EnrichedAbsence) => {
-        if (confirm(`${absence.childName}さんの欠席連絡をキャンセルしますか？\n\n※元のレッスン枠の人数が復元されます`)) {
+        const reportTypeLabel = absence.reportType === "LATE" ? "遅刻" : "欠席";
+        const recoveryHint = absence.reportType === "ABSENCE"
+            ? "\n\n※元のレッスン枠の人数が復元されます"
+            : "";
+        if (confirm(`${absence.childName}さんの${reportTypeLabel}連絡をキャンセルしますか？${recoveryHint}`)) {
             cancelAbsenceMutation.mutate(absence.id);
         }
     };
@@ -195,6 +206,15 @@ export function HistoryView() {
     };
 
     const openAdminBookingDialog = async (absence: EnrichedAbsence) => {
+        if (absence.reportType === "LATE") {
+            toast({
+                title: "登録できません",
+                description: "遅刻連絡では振替登録できません。",
+                variant: "destructive",
+            });
+            return;
+        }
+
         if (!isClassBand(absence.declaredClassBand)) {
             toast({
                 title: "登録できません",
@@ -427,7 +447,7 @@ export function HistoryView() {
                                 <Loader2 className="w-6 h-6 animate-spin" />
                             </div>
                         ) : filteredAbsences.length === 0 ? (
-                            <p className="text-center text-muted-foreground py-8">欠席データがありません</p>
+                            <p className="text-center text-muted-foreground py-8">欠席・遅刻データがありません</p>
                         ) : (
                             <div className="overflow-x-auto">
                                 <Table>
@@ -435,6 +455,7 @@ export function HistoryView() {
                                         <TableRow>
                                             <TableHead>お子様名</TableHead>
                                             <TableHead>クラス</TableHead>
+                                            <TableHead>区分</TableHead>
                                             <TableHead>欠席日</TableHead>
                                             <TableHead>レッスン</TableHead>
                                             <TableHead>ステータス</TableHead>
@@ -448,18 +469,23 @@ export function HistoryView() {
                                             <TableRow key={absence.id}>
                                                 <TableCell className="font-medium">{absence.childName}</TableCell>
                                                 <TableCell>{absence.declaredClassBand}</TableCell>
+                                                <TableCell>{getAbsenceReportTypeBadge(absence.reportType)}</TableCell>
                                                 <TableCell>{formatJstDay(absence.absentDate)}</TableCell>
                                                 <TableCell>
                                                     {absence.courseLabel && absence.startTime
                                                         ? `${absence.courseLabel} ${absence.startTime}`
                                                         : "-"}
                                                 </TableCell>
-                                                <TableCell>{getStatusBadge(absence.makeupStatus)}</TableCell>
+                                                <TableCell>
+                                                    {absence.reportType === "LATE"
+                                                        ? <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300">遅刻連絡</Badge>
+                                                        : getStatusBadge(absence.makeupStatus)}
+                                                </TableCell>
                                                 <TableCell className="font-mono text-sm">{absence.confirmCode}</TableCell>
                                                 <TableCell>{absence.reason?.trim() || "-"}</TableCell>
                                                 <TableCell>
                                                     <div className="flex items-center gap-2">
-                                                        {absence.makeupStatus === "PENDING" && (
+                                                        {absence.makeupStatus === "PENDING" && absence.reportType === "ABSENCE" && (
                                                             <Button
                                                                 variant="outline"
                                                                 size="sm"

@@ -74,6 +74,7 @@ export async function sendAbsenceConfirmationEmail(
   classBand: string,
   absentDate: string,
   makeupDeadline: string,
+  reportType: "ABSENCE" | "LATE",
   resumeToken: string,
   absenceId?: string,
   courseLabel?: string,
@@ -81,6 +82,9 @@ export async function sendAbsenceConfirmationEmail(
   confirmCode?: string
 ) {
   const { client, fromEmail } = await getUncachableResendClient();
+  const isLateReport = reportType === "LATE";
+  const reportTypeLabel = isLateReport ? "遅刻" : "欠席";
+  const subject = `[${reportTypeLabel}連絡受付] ${absentDate} - ${classBand}`;
 
   const resumeUrl = `${BASE_URL}/absence?token=${resumeToken}`;
   const cancelUrl = absenceId && resumeToken
@@ -93,7 +97,7 @@ export async function sendAbsenceConfirmationEmail(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>欠席連絡受付完了</title>
+  <title>${reportTypeLabel}連絡受付完了</title>
   <style>
     body {
       font-family: "Noto Sans JP", sans-serif;
@@ -163,20 +167,21 @@ export async function sendAbsenceConfirmationEmail(
 <body>
   <div class="container">
     <div class="header">
-      <h1>✅ 欠席連絡を受け付けました</h1>
+      <h1>✅ ${reportTypeLabel}連絡を受け付けました</h1>
     </div>
 
     <div class="content">
       <p>いつもご利用ありがとうございます。</p>
-      <p><strong>${childName}</strong> さんの欠席連絡を受け付けました。</p>
+      <p><strong>${childName}</strong> さんの${reportTypeLabel}連絡を受け付けました。</p>
 
       <div class="info-box">
         <p><strong>お子様名：</strong>${childName}</p>
+        <p><strong>連絡区分：</strong>${reportTypeLabel}</p>
         <p><strong>クラス帯：</strong>${classBand}</p>
         ${courseLabel ? `<p><strong>コース：</strong>${courseLabel}</p>` : ''}
         ${startTime ? `<p><strong>時間：</strong>${startTime}</p>` : ''}
-        <p><strong>欠席日：</strong>${absentDate}</p>
-        <p><strong>振替期限：</strong>${makeupDeadline}</p>
+        <p><strong>${isLateReport ? "対象日" : "欠席日"}：</strong>${absentDate}</p>
+        ${!isLateReport ? `<p><strong>振替期限：</strong>${makeupDeadline}</p>` : ''}
         ${confirmCode ? `<p style="margin-top: 12px; padding: 12px; background-color: #f3f4f6; border-radius: 8px; text-align: center;">
           <strong>確認コード：</strong>
           <span style="font-size: 24px; font-weight: bold; letter-spacing: 4px; color: #0066cc;">${confirmCode}</span>
@@ -186,11 +191,14 @@ export async function sendAbsenceConfirmationEmail(
       <div style="background-color: #dbeafe; border-left: 4px solid #3b82f6; padding: 12px; margin: 16px 0; border-radius: 4px; font-size: 14px;">
         <p style="font-weight: 600; color: #1e40af; margin: 0 0 8px 0;">📋 確認コードについて</p>
         <p style="margin: 0; color: #1e40af;">
-          この6桁の確認コードで、予約状況の確認やキャンセルができます。メールが届かなくても大丈夫！確認コードをメモしておいてください。
+          ${isLateReport
+      ? "この6桁の確認コードで、連絡状況の確認やキャンセルができます。メールが届かなくても大丈夫！確認コードをメモしておいてください。"
+      : "この6桁の確認コードで、予約状況の確認やキャンセルができます。メールが届かなくても大丈夫！確認コードをメモしておいてください。"}
         </p>
       </div>
       ` : ''}
 
+      ${!isLateReport ? `
       <div style="background-color: #f0f7ff; border-left: 4px solid #0066cc; padding: 16px; margin: 20px 0; border-radius: 4px;">
         <p style="font-weight: 600; margin: 0 0 8px 0;">📌 振替予約の流れ</p>
         <ol style="margin: 8px 0; padding-left: 20px; font-size: 14px;">
@@ -214,18 +222,28 @@ export async function sendAbsenceConfirmationEmail(
           <li style="margin: 4px 0;">欠席連絡はレッスン開始時刻までです。開始後は振替登録できません。</li>
         </ul>
       </div>
+      ` : `
+      <div style="background-color: #f0f7ff; border-left: 4px solid #0066cc; padding: 16px; margin: 20px 0; border-radius: 4px;">
+        <p style="font-weight: 600; margin: 0 0 8px 0;">📌 ご案内</p>
+        <p style="margin: 0; font-size: 14px;">
+          この連絡は「遅刻連絡」として登録されました。遅刻連絡では振替予約はできません。
+        </p>
+      </div>
+      `}
 
       ${cancelUrl ? `
       <div style="text-align: center; margin-top: 24px; padding-top: 20px; border-top: 1px solid #e5e5e5;">
-        <p style="font-size: 14px; color: #666; margin-bottom: 8px;">欠席をキャンセルする場合はこちら:</p>
+        <p style="font-size: 14px; color: #666; margin-bottom: 8px;">${reportTypeLabel}連絡をキャンセルする場合はこちら:</p>
         <p style="font-size: 12px; color: #dc2626; margin-bottom: 12px; font-weight: 600;">
-          ⚠️ 欠席登録から10分以内のみキャンセル可能です
+          ⚠️ ${reportTypeLabel}連絡の登録から10分以内のみキャンセル可能です
         </p>
         <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
-          振替枠の関係上、欠席登録から10分経過後は、元のレッスンに空きがある場合のみキャンセルできます
+          ${isLateReport
+      ? "登録から10分経過後もキャンセルできますが、最新状態で反映まで時間がかかる場合があります。"
+      : "振替枠の関係上、欠席登録から10分経過後は、元のレッスンに空きがある場合のみキャンセルできます"}
         </p>
         <a href="${cancelUrl}" style="display: inline-block; background-color: #dc2626; color: #ffffff !important; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-weight: 600; font-size: 14px;">
-          欠席連絡をキャンセル
+          ${reportTypeLabel}連絡をキャンセル
         </a>
       </div>
       ` : ''}
@@ -243,7 +261,7 @@ export async function sendAbsenceConfirmationEmail(
   console.log("📧 メール送信開始:", {
     from: fromEmail,
     to: toEmail,
-    subject: `[欠席連絡受付] ${absentDate} - ${classBand}`,
+    subject,
     hasResumeUrl: !!resumeUrl,
     hasCancelUrl: !!cancelUrl,
   });
@@ -253,7 +271,7 @@ export async function sendAbsenceConfirmationEmail(
       const result = await client.emails.send({
         from: fromEmail,
         to: toEmail,
-        subject: `[欠席連絡受付] ${absentDate} - ${classBand}`,
+        subject,
         html: htmlContent,
       });
       console.log("📧 メール送信結果:", result);
