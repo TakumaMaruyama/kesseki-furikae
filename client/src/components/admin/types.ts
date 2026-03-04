@@ -10,6 +10,7 @@ export type LessonStatusAbsence = {
     childName: string;
     contactEmail: string | null;
     makeupStatus: string;
+    reportType: "ABSENCE" | "LATE";
     confirmCode: string;
     reason: string | null;
 };
@@ -38,6 +39,7 @@ export type EnrichedAbsence = {
     id: string;
     childName: string;
     declaredClassBand: string;
+    reportType: "ABSENCE" | "LATE";
     absentDate: string;
     makeupStatus: string;
     confirmCode: string;

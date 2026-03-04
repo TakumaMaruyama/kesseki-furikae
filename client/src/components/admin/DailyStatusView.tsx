@@ -20,6 +20,10 @@ interface DailyStatusItem {
     startTime: string;
 }
 
+interface DailyAbsenceItem extends DailyStatusItem {
+    reportType: "ABSENCE" | "LATE";
+}
+
 interface TrialParticipantItem {
     id: string;
     participantName: string;
@@ -33,7 +37,7 @@ interface TrialParticipantItem {
 
 interface DailyStatusData {
     date: string;
-    absentees: DailyStatusItem[];
+    absentees: DailyAbsenceItem[];
     makeups: DailyStatusItem[];
     trialParticipants: TrialParticipantItem[];
 }
@@ -62,8 +66,8 @@ function getClassBandOrder(classBand: string): number {
     return CLASS_BAND_ORDER[classBand] ?? Number.MAX_SAFE_INTEGER;
 }
 
-function groupAndSortByStartTime(items: DailyStatusItem[]) {
-    const grouped = items.reduce<Record<string, DailyStatusItem[]>>((acc, item) => {
+function groupAndSortByStartTime<T extends DailyStatusItem>(items: T[]) {
+    const grouped = items.reduce<Record<string, T[]>>((acc, item) => {
         if (!acc[item.startTime]) {
             acc[item.startTime] = [];
         }
@@ -81,6 +85,17 @@ function groupAndSortByStartTime(items: DailyStatusItem[]) {
                 return a.childName.localeCompare(b.childName, "ja");
             }),
         }));
+}
+
+function getReportTypeBadgeStyle(reportType: "ABSENCE" | "LATE"): string {
+    if (reportType === "LATE") {
+        return "bg-amber-100 text-amber-800 border-amber-200";
+    }
+    return "bg-red-100 text-red-700 border-red-200";
+}
+
+function getReportTypeLabel(reportType: "ABSENCE" | "LATE"): string {
+    return reportType === "LATE" ? "遅刻" : "欠席";
 }
 
 function groupAndSortTrialParticipantsByStartTime(items: TrialParticipantItem[]) {
@@ -263,9 +278,9 @@ export function DailyStatusView() {
         <div className="space-y-6">
             <Card className="border-2">
                 <CardHeader>
-                    <CardTitle className="text-xl">本日の欠席・振替・体験者</CardTitle>
+                    <CardTitle className="text-xl">本日の欠席・遅刻・振替・体験者</CardTitle>
                     <p className="text-sm text-muted-foreground">
-                        日付を選択して、その日の欠席者・振替者・体験者を確認できます
+                        日付を選択して、その日の欠席者・遅刻者・振替者・体験者を確認できます
                     </p>
                 </CardHeader>
                 <CardContent>
@@ -312,7 +327,7 @@ export function DailyStatusView() {
                                         <CardHeader className="pb-3">
                                             <CardTitle className="text-base flex items-center gap-2 text-destructive">
                                                 <UserX className="w-5 h-5" />
-                                                欠席者
+                                                欠席・遅刻者
                                                 <span className="ml-auto text-2xl font-bold">
                                                     {data?.absentees.length || 0}
                                                 </span>
@@ -337,7 +352,12 @@ export function DailyStatusView() {
                                                                         key={`${group.startTime}-${item.childName}-${index}`}
                                                                         className="p-3 bg-destructive/5"
                                                                     >
-                                                                        <p className="font-semibold">{item.childName}</p>
+                                                                        <div className="flex items-center justify-between gap-2">
+                                                                            <p className="font-semibold">{item.childName}</p>
+                                                                            <span className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium ${getReportTypeBadgeStyle(item.reportType)}`}>
+                                                                                {getReportTypeLabel(item.reportType)}
+                                                                            </span>
+                                                                        </div>
                                                                         <p className="text-sm text-muted-foreground">
                                                                             {item.courseLabel} （{item.classBand}）
                                                                         </p>

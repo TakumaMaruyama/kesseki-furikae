@@ -63,6 +63,10 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function getReportTypeLabel(reportType: string | null | undefined): string {
+  return reportType === "LATE" ? "遅刻" : "欠席";
+}
+
 export default function StatusPage() {
   const [confirmCode, setConfirmCode] = useState("");
   const [searchedCode, setSearchedCode] = useState<string | null>(null);
@@ -213,7 +217,7 @@ export default function StatusPage() {
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
                         <CalendarIcon className="w-5 h-5" />
-                        欠席連絡 ({data.absences.length}件)
+                        欠席・遅刻連絡 ({data.absences.length}件)
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
@@ -223,22 +227,32 @@ export default function StatusPage() {
                             <div>
                               <h3 className="font-semibold text-lg">{absence.childName}</h3>
                               <p className="text-sm text-muted-foreground">
-                                {absence.declaredClassBand}
+                                {absence.declaredClassBand} / {getReportTypeLabel(absence.reportType)}
                               </p>
                             </div>
-                            <StatusBadge status={absence.makeupStatus} />
+                            {absence.reportType === "LATE"
+                              ? <Badge variant="outline">遅刻連絡</Badge>
+                              : <StatusBadge status={absence.makeupStatus} />}
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-sm">
                             <div>
-                              <span className="text-muted-foreground">欠席日:</span>{" "}
+                              <span className="text-muted-foreground">{absence.reportType === "LATE" ? "対象日" : "欠席日"}:</span>{" "}
                               {format(new Date(absence.absentDate), "yyyy年M月d日(E)", { locale: ja })}
                             </div>
                             <div>
-                              <span className="text-muted-foreground">振替期限:</span>{" "}
-                              {format(new Date(absence.makeupDeadline), "yyyy年M月d日", { locale: ja })}
+                              {absence.reportType === "LATE" ? (
+                                <>
+                                  <span className="text-muted-foreground">振替:</span> 対象外
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-muted-foreground">振替期限:</span>{" "}
+                                  {format(new Date(absence.makeupDeadline), "yyyy年M月d日", { locale: ja })}
+                                </>
+                              )}
                             </div>
                           </div>
-                          {absence.makeupStatus === "PENDING" && (
+                          {absence.makeupStatus === "PENDING" && absence.reportType !== "LATE" && (
                             <div className="mt-4 flex gap-2">
                               <Link href={`/absence?token=${absence.resumeToken}`}>
                                 <Button size="sm" data-testid={`button-book-${absence.id}`}>

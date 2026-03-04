@@ -5,6 +5,7 @@ import { log } from "./vite";
 const COMPAT_MIGRATION_STATEMENTS = [
   `ALTER TABLE class_slots ADD COLUMN IF NOT EXISTS is_closed boolean NOT NULL DEFAULT false`,
   `ALTER TABLE absences ADD COLUMN IF NOT EXISTS reason text`,
+  `ALTER TABLE absences ADD COLUMN IF NOT EXISTS report_type varchar NOT NULL DEFAULT 'ABSENCE'`,
   `ALTER TABLE absences ADD COLUMN IF NOT EXISTS source_type varchar NOT NULL DEFAULT 'NORMAL'`,
   `ALTER TABLE absences ADD COLUMN IF NOT EXISTS closure_event_id varchar`,
   `CREATE TABLE IF NOT EXISTS closure_events (

@@ -28,10 +28,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { addJstDays, formatJstDate, parseJstDate } from "@shared/jst";
 import { getActualCurrent, getRemainingCapacity } from "@shared/capacity";
 
+type ReportType = "ABSENCE" | "LATE";
+
 type AbsenceData = {
   id: string;
   childName: string;
   declaredClassBand: "初級" | "中級" | "上級";
+  reportType: ReportType;
   absentDate: string;
   originalSlotId?: string;
   contactEmail: string | null;
@@ -63,6 +66,7 @@ type BatchResultItem = {
   childName: string;
   declaredClassBand: "初級" | "中級" | "上級";
   absentDateISO: string;
+  reportType: ReportType;
 };
 
 type ClosureValidationResult = {
@@ -77,6 +81,10 @@ type ClosureValidationResult = {
 };
 
 const CLASS_BANDS: Array<"初級" | "中級" | "上級"> = ["初級", "中級", "上級"];
+
+function getReportTypeLabel(reportType: ReportType): string {
+  return reportType === "LATE" ? "遅刻" : "欠席";
+}
 
 // Helper to safely parse date string to local Date object avoiding timezone shifts
 const parseLocalDate = (dateStr: any) => {
@@ -150,6 +158,7 @@ export default function ParentPage() {
   const absenceForm = useForm<CreateAbsencesBatchRequest>({
     resolver: zodResolver(createAbsencesBatchRequestSchema),
     defaultValues: {
+      reportType: "ABSENCE",
       items: [{
         childName: "",
         declaredClassBand: undefined,
@@ -167,9 +176,17 @@ export default function ParentPage() {
     name: "items",
   });
   const watchedItems = absenceForm.watch("items");
+  const selectedReportType = absenceForm.watch("reportType");
+  const isLateReport = selectedReportType === "LATE";
   const optionalReasonValue = absenceForm.watch("reason");
   const optionalContactEmailValue = absenceForm.watch("contactEmail");
   const isOptionalSectionOpen = optionalOpen || !!optionalReasonValue?.trim() || !!optionalContactEmailValue?.trim();
+
+  useEffect(() => {
+    if (isClosureMode && absenceForm.getValues("reportType") !== "ABSENCE") {
+      absenceForm.setValue("reportType", "ABSENCE", { shouldDirty: true, shouldValidate: true });
+    }
+  }, [isClosureMode, absenceForm]);
 
   const openOptionalAndFocus = (target: "reason" | "contactEmail") => {
     setOptionalOpen(true);
@@ -266,15 +283,18 @@ export default function ParentPage() {
       apiRequest("GET", `/api/absences/${token}`)
         .then((data: AbsenceData) => {
           const typedClassBand = data.declaredClassBand as "初級" | "中級" | "上級";
-          setAbsenceData({ ...data, declaredClassBand: typedClassBand, resumeToken: token });
+          const typedReportType = (data.reportType || "ABSENCE") as ReportType;
+          setAbsenceData({ ...data, declaredClassBand: typedClassBand, reportType: typedReportType, resumeToken: token });
 
-          if (data.makeupStatus === "PENDING") {
+          if (data.makeupStatus === "PENDING" && typedReportType === "ABSENCE") {
             activateSearchFromAbsence({
               id: data.id,
               childName: data.childName,
               declaredClassBand: typedClassBand,
               absentDate: data.absentDate,
             });
+          } else {
+            setSearchParams2(null);
           }
         })
         .catch(() => {
@@ -311,6 +331,7 @@ export default function ParentPage() {
       const result = await apiRequest("POST", "/api/closure-events/validate-code", { sharedCode: closureCode }) as ClosureValidationResult;
       setClosureValidation(result);
       setClosureCode(result.sharedCode);
+      absenceForm.setValue("reportType", "ABSENCE", { shouldDirty: true, shouldValidate: true });
 
       const firstSlot = result.slots[0];
       if (firstSlot) {
@@ -411,7 +432,7 @@ export default function ParentPage() {
 
   const onAbsenceSubmit = async (data: CreateAbsencesBatchRequest) => {
     try {
-      if (!isClosureMode) {
+      if (!isClosureMode && data.reportType === "ABSENCE") {
         const slotsCheck = await apiRequest("GET", "/api/check-slots-availability");
         if (!slotsCheck.hasSlots) {
           toast({
@@ -424,9 +445,14 @@ export default function ParentPage() {
       }
 
       const endpoint = isClosureMode ? "/api/closure-events/redeem" : "/api/absences/batch";
-      const payload = isClosureMode ? { ...data, sharedCode: closureValidation?.sharedCode } : data;
+      const payload = isClosureMode
+        ? { ...data, reportType: "ABSENCE" as const, sharedCode: closureValidation?.sharedCode }
+        : data;
       const result = await postJsonWithDetails(endpoint, payload);
-      const items = (result?.items || []) as BatchResultItem[];
+      const items = ((result?.items || []) as BatchResultItem[]).map((item) => ({
+        ...item,
+        reportType: item.reportType || data.reportType || "ABSENCE",
+      }));
 
       if (items.length === 0) {
         throw new Error("欠席登録結果を取得できませんでした。");
@@ -446,6 +472,7 @@ export default function ParentPage() {
         id: firstItem.absenceId,
         childName: firstItem.childName,
         declaredClassBand: firstItem.declaredClassBand,
+        reportType: firstItem.reportType,
         absentDate: firstItem.absentDateISO,
         originalSlotId: firstFormRow?.originalSlotId,
         contactEmail: data.contactEmail?.trim() ? data.contactEmail.trim() : null,
@@ -459,16 +486,20 @@ export default function ParentPage() {
       };
 
       setAbsenceData(firstAbsence);
-      activateSearchFromAbsence({
-        id: firstAbsence.id,
-        childName: firstAbsence.childName,
-        declaredClassBand: firstAbsence.declaredClassBand,
-        absentDate: firstAbsence.absentDate,
-      });
+      if (firstAbsence.reportType === "ABSENCE") {
+        activateSearchFromAbsence({
+          id: firstAbsence.id,
+          childName: firstAbsence.childName,
+          declaredClassBand: firstAbsence.declaredClassBand,
+          absentDate: firstAbsence.absentDate,
+        });
+      } else {
+        setSearchParams2(null);
+      }
 
       queryClient.invalidateQueries({ queryKey: ["/api/admin/daily-lessons"] });
       toast({
-        title: "欠席連絡を受け付けました",
+        title: `${getReportTypeLabel(firstAbsence.reportType)}連絡を受け付けました`,
         description: "確認コード一覧を表示しています。",
       });
     } catch (error: any) {
@@ -523,13 +554,22 @@ export default function ParentPage() {
       return;
     }
 
-    if (confirm("欠席連絡をキャンセルしますか？関連する予約もすべてキャンセルされます。")) {
+    const reportTypeLabel = getReportTypeLabel(absenceData.reportType);
+    if (confirm(`${reportTypeLabel}連絡をキャンセルしますか？関連する予約もすべてキャンセルされます。`)) {
       cancelAbsenceMutation.mutate(resumeToken);
     }
   };
 
   const handleBook = async (slotId: string) => {
     if (!searchParams2) return;
+    if (absenceData?.reportType === "LATE") {
+      toast({
+        title: "予約できません",
+        description: "遅刻連絡では振替予約できません。",
+        variant: "destructive",
+      });
+      return;
+    }
 
     try {
       const result = await apiRequest("POST", "/api/book", {
@@ -574,6 +614,11 @@ export default function ParentPage() {
       });
     }
   };
+
+  const canSearchMakeup = !!absenceData
+    && absenceData.reportType === "ABSENCE"
+    && absenceData.makeupStatus === "PENDING"
+    && isMakeupDeadlineOpen(absenceData.makeupDeadline);
 
   return (
     <div className="min-h-screen bg-background">
@@ -640,7 +685,7 @@ export default function ParentPage() {
         <section>
           <div className="mb-4">
             <p className="text-xs font-semibold uppercase text-muted-foreground">STEP 1</p>
-            <h2 className="text-2xl font-semibold">欠席連絡を登録</h2>
+            <h2 className="text-2xl font-semibold">欠席・遅刻連絡を登録</h2>
           </div>
 
           {absenceData ? (
@@ -649,18 +694,21 @@ export default function ParentPage() {
                 <div className="flex items-start gap-3 mb-4">
                   <CheckCircleIcon className="w-5 h-5 text-green-500 mt-0.5" />
                   <div className="flex-1">
-                    <p className="font-semibold mb-2">欠席連絡が登録されています</p>
+                    <p className="font-semibold mb-2">{getReportTypeLabel(absenceData.reportType)}連絡が登録されています</p>
                     <div className="space-y-1 text-sm text-muted-foreground">
                       <p>お子様の名前: <span className="font-medium text-foreground">{absenceData.childName}</span></p>
+                      <p>区分: <span className="font-medium text-foreground">{getReportTypeLabel(absenceData.reportType)}</span></p>
                       <p>クラス帯: <span className="font-medium text-foreground">{absenceData.declaredClassBand}</span></p>
-                      <p>欠席日: <span className="font-medium text-foreground">{format(parseLocalDate(absenceData.absentDate), "yyyy年M月d日(E)", { locale: ja })}</span></p>
+                      <p>{absenceData.reportType === "LATE" ? "対象日" : "欠席日"}: <span className="font-medium text-foreground">{format(parseLocalDate(absenceData.absentDate), "yyyy年M月d日(E)", { locale: ja })}</span></p>
                       <p>
                         確認コード:{" "}
                         <span className="font-mono font-semibold tracking-[0.12em] text-foreground" data-testid="text-absence-confirm-code">
                           {absenceData.confirmCode || "-"}
                         </span>
                       </p>
-                      <p>振替期限: <span className="font-medium text-foreground">{format(parseLocalDate(absenceData.makeupDeadline), "yyyy年M月d日", { locale: ja })}</span></p>
+                      {absenceData.reportType === "ABSENCE" && (
+                        <p>振替期限: <span className="font-medium text-foreground">{format(parseLocalDate(absenceData.makeupDeadline), "yyyy年M月d日", { locale: ja })}</span></p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -673,7 +721,7 @@ export default function ParentPage() {
                     data-testid="button-cancel-absence"
                   >
                     <XCircleIcon className="w-4 h-4 mr-2" />
-                    {cancelAbsenceMutation.isPending ? "キャンセル中..." : "欠席連絡をキャンセル"}
+                    {cancelAbsenceMutation.isPending ? "キャンセル中..." : `${getReportTypeLabel(absenceData.reportType)}連絡をキャンセル`}
                   </Button>
                 )}
               </CardContent>
@@ -683,6 +731,46 @@ export default function ParentPage() {
               <CardContent className="p-4 sm:p-6 space-y-6">
                 <Form {...absenceForm}>
                   <form onSubmit={absenceForm.handleSubmit(onAbsenceSubmit)} className="space-y-6">
+                    <FormField
+                      control={absenceForm.control}
+                      name="reportType"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>連絡区分</FormLabel>
+                          <FormControl>
+                            <div className="inline-flex w-full rounded-lg border p-1">
+                              <Button
+                                type="button"
+                                variant={field.value === "ABSENCE" ? "default" : "ghost"}
+                                className="flex-1"
+                                onClick={() => field.onChange("ABSENCE")}
+                                data-testid="button-report-type-absence"
+                              >
+                                欠席
+                              </Button>
+                              <Button
+                                type="button"
+                                variant={field.value === "LATE" ? "default" : "ghost"}
+                                className="flex-1"
+                                onClick={() => field.onChange("LATE")}
+                                disabled={isClosureMode}
+                                data-testid="button-report-type-late"
+                              >
+                                遅刻
+                              </Button>
+                            </div>
+                          </FormControl>
+                          {isClosureMode && (
+                            <p className="text-xs text-muted-foreground">休講コード適用中は欠席のみ選択できます。</p>
+                          )}
+                          {field.value === "LATE" && (
+                            <p className="text-xs text-muted-foreground">遅刻連絡では振替予約はできません。</p>
+                          )}
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
                     <div className="space-y-3">
                       {fields.map((field, index) => {
                         const row = watchedItems?.[index];
@@ -830,7 +918,9 @@ export default function ParentPage() {
                                       </p>
                                     )}
                                   <p className="text-xs text-muted-foreground mt-2">
-                                    欠席連絡はレッスン開始時刻までです。開始後は振替登録できません。
+                                    {selectedReportType === "LATE"
+                                      ? "遅刻連絡はレッスン開始前までに登録してください。"
+                                      : "欠席連絡はレッスン開始時刻までです。開始後は振替登録できません。"}
                                   </p>
                                   <FormMessage />
                                 </FormItem>
@@ -931,7 +1021,7 @@ export default function ParentPage() {
                                 />
                               </FormControl>
                               <p className="text-xs text-muted-foreground">
-                                入力すると確認コードと欠席完了通知がメールで届きます
+                                入力すると確認コードと{isLateReport ? "遅刻" : "欠席"}完了通知がメールで届きます
                               </p>
                               <FormMessage />
                             </FormItem>
@@ -959,7 +1049,9 @@ export default function ParentPage() {
                         ? "登録中..."
                         : isClosureMode
                           ? "休講振替権を登録"
-                          : "欠席連絡を登録"}
+                          : isLateReport
+                            ? "遅刻連絡を登録"
+                            : "欠席連絡を登録"}
                     </Button>
 
                     {!token && (
@@ -1023,16 +1115,22 @@ export default function ParentPage() {
           </div>
 
           {absenceData ? (
-            absenceData.makeupStatus === "MAKEUP_CONFIRMED" ? (
+            isAbsenceCancelled(absenceData.makeupStatus) ? (
+              <Card className="border-2 bg-muted/40">
+                <CardContent className="p-12 text-center text-muted-foreground">
+                  この{getReportTypeLabel(absenceData.reportType)}連絡はキャンセル済みです。新しい連絡を登録してください。
+                </CardContent>
+              </Card>
+            ) : absenceData.reportType === "LATE" ? (
+              <Card className="border-2 bg-muted/40">
+                <CardContent className="p-12 text-center text-muted-foreground">
+                  遅刻連絡では振替予約はできません。レッスンへそのままお越しください。
+                </CardContent>
+              </Card>
+            ) : absenceData.makeupStatus === "MAKEUP_CONFIRMED" ? (
               <Card className="border-2 bg-muted/40">
                 <CardContent className="p-12 text-center text-muted-foreground">
                   すでに振替予約が確定済みです。振替後の変更は「予約確認」のページからできます。
-                </CardContent>
-              </Card>
-            ) : isAbsenceCancelled(absenceData.makeupStatus) ? (
-              <Card className="border-2 bg-muted/40">
-                <CardContent className="p-12 text-center text-muted-foreground">
-                  この欠席連絡はキャンセル済みです。新しい欠席連絡を登録してください。
                 </CardContent>
               </Card>
             ) : !isMakeupDeadlineOpen(absenceData.makeupDeadline) ? (
@@ -1073,7 +1171,7 @@ export default function ParentPage() {
           )}
         </section>
 
-        {searchParams2 && absenceData && absenceData.makeupStatus === "PENDING" && isMakeupDeadlineOpen(absenceData.makeupDeadline) && (
+        {searchParams2 && canSearchMakeup && (
           <section>
             <h2 className="text-2xl font-semibold mb-6">検索結果</h2>
 
@@ -1213,7 +1311,9 @@ export default function ParentPage() {
       <Dialog open={showConfirmCodeDialog} onOpenChange={setShowConfirmCodeDialog} modal={false}>
         <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="text-center text-xl">欠席連絡を受け付けました</DialogTitle>
+            <DialogTitle className="text-center text-xl">
+              {confirmItems[0] ? `${getReportTypeLabel(confirmItems[0].reportType)}連絡を受け付けました` : "連絡を受け付けました"}
+            </DialogTitle>
             <DialogDescription className="text-center">
               子どもごとの確認コードと再開リンクです。<br />
               必ず保存してください。
@@ -1228,7 +1328,7 @@ export default function ParentPage() {
                     <div>
                       <p className="font-semibold">{item.childName}</p>
                       <p className="text-xs text-muted-foreground">
-                        {item.absentDateISO} / {item.declaredClassBand}
+                        {item.absentDateISO} / {item.declaredClassBand} / {getReportTypeLabel(item.reportType)}
                       </p>
                     </div>
                     <span className="text-2xl font-bold tracking-[0.2em] font-mono text-primary" data-testid={`text-confirm-code-${index}`}>
@@ -1236,7 +1336,7 @@ export default function ParentPage() {
                     </span>
                   </div>
                   <div className="text-xs text-muted-foreground break-all">
-                    振替リンク: <a href={`/?token=${item.resumeToken}`} className="underline">{resumeUrl}</a>
+                    連絡詳細リンク: <a href={`/?token=${item.resumeToken}`} className="underline">{resumeUrl}</a>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <Button
@@ -1251,7 +1351,7 @@ export default function ParentPage() {
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => copyText(resumeUrl, `${item.childName}さんの振替リンクをコピーしました。`)}
+                      onClick={() => copyText(resumeUrl, `${item.childName}さんの連絡詳細リンクをコピーしました。`)}
                       data-testid={`button-copy-link-${index}`}
                     >
                       <CopyIcon className="w-4 h-4 mr-2" />
