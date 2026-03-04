@@ -2637,21 +2637,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "指定された枠が見つかりません。" });
       }
 
-      const slotAbsences = await storage.getAbsencesByOriginalSlotId(data.id);
-      if (slotAbsences.length > 0) {
-        return res.status(400).json({
-          error: "この枠には欠席登録があるため削除できません。先に欠席登録を削除してください。"
+      if (!data.applyToFuture) {
+        const slotAbsences = await storage.getAbsencesByOriginalSlotId(data.id);
+        if (slotAbsences.length > 0) {
+          return res.status(400).json({
+            error: "この枠には欠席登録があるため削除できません。先に欠席登録を削除してください。"
+          });
+        }
+
+        const slotRequests = await storage.getRequestsBySlotId(data.id);
+        for (const request of slotRequests) {
+          await storage.deleteRequest(request.id);
+        }
+
+        await storage.deleteClassSlot(data.id);
+
+        return res.json({
+          success: true,
+          message: "枠を削除しました。",
+          count: 1,
+          skipped: 0,
+          deletedRequests: slotRequests.length,
         });
       }
 
-      const slotRequests = await storage.getRequestsBySlotId(data.id);
-      for (const request of slotRequests) {
-        await storage.deleteRequest(request.id);
+      const dayOfWeek = getJstDayOfWeek(existing.date);
+      const allCandidateSlots = await db
+        .select()
+        .from(classSlots)
+        .where(and(
+          eq(classSlots.startTime, existing.startTime),
+          eq(classSlots.classBand, existing.classBand),
+          eq(classSlots.courseLabel, existing.courseLabel),
+          gte(classSlots.date, existing.date),
+        ));
+      const targetSlots = allCandidateSlots.filter((slot) => getJstDayOfWeek(slot.date) === dayOfWeek);
+
+      let deletedCount = 0;
+      let skippedCount = 0;
+      let deletedRequestCount = 0;
+
+      for (const slot of targetSlots) {
+        const slotAbsences = await storage.getAbsencesByOriginalSlotId(slot.id);
+        if (slotAbsences.length > 0) {
+          skippedCount++;
+          continue;
+        }
+
+        const slotRequests = await storage.getRequestsBySlotId(slot.id);
+        for (const request of slotRequests) {
+          await storage.deleteRequest(request.id);
+        }
+
+        deletedRequestCount += slotRequests.length;
+        await storage.deleteClassSlot(slot.id);
+        deletedCount++;
       }
 
-      await storage.deleteClassSlot(data.id);
+      if (skippedCount > 0 && deletedCount === 0) {
+        return res.status(400).json({
+          error: `対象の${skippedCount}件の枠には欠席登録があるため削除できませんでした。`
+        });
+      }
 
-      res.json({ success: true, message: "枠を削除しました。", deletedRequests: slotRequests.length });
+      return res.json({
+        success: true,
+        message: `${deletedCount}件の枠を削除しました。`,
+        count: deletedCount,
+        skipped: skippedCount,
+        deletedRequests: deletedRequestCount,
+      });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }

@@ -435,6 +435,7 @@ export const updateSlotRequestSchema = z.object({
 
 export const deleteSlotRequestSchema = z.object({
   id: z.string(),
+  applyToFuture: z.boolean().optional(),
 });
 
 const trialParticipantFieldSchema = z.string().trim().min(1).max(100);
