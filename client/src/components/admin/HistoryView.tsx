@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -18,6 +19,12 @@ import type { SlotSearchResult } from "@shared/schema";
 
 type ClassBand = "初級" | "中級" | "上級";
 
+type MonthGroup<T> = {
+    key: string;
+    label: string;
+    items: T[];
+};
+
 function isClassBand(value: string): value is ClassBand {
     return value === "初級" || value === "中級" || value === "上級";
 }
@@ -26,13 +33,87 @@ function formatJstDay(input: Date | string | number): string {
     return format(parseJstDate(formatJstDate(input)), "M/d(E)", { locale: ja });
 }
 
-function parseRequestCreatedAt(value: string | null | undefined): number | null {
+function parseTimestamp(value: string | null | undefined): number | null {
     if (!value) {
         return null;
     }
 
     const timestamp = new Date(value).getTime();
     return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function compareNullableTimestampsDesc(aValue: string | null | undefined, bValue: string | null | undefined): number {
+    const aTimestamp = parseTimestamp(aValue);
+    const bTimestamp = parseTimestamp(bValue);
+
+    if (aTimestamp !== null && bTimestamp !== null && aTimestamp !== bTimestamp) {
+        return bTimestamp - aTimestamp;
+    }
+    if (aTimestamp === null && bTimestamp !== null) {
+        return 1;
+    }
+    if (aTimestamp !== null && bTimestamp === null) {
+        return -1;
+    }
+
+    return 0;
+}
+
+function getMonthKey(input: Date | string | number): string {
+    return formatJstDate(input).slice(0, 7);
+}
+
+function getMonthLabel(input: Date | string | number): string {
+    return format(parseJstDate(formatJstDate(input)), "yyyy年M月", { locale: ja });
+}
+
+function groupItemsByMonth<T>(
+    items: T[],
+    getDate: (item: T) => Date | string | number | null | undefined,
+    fallbackLabel?: string,
+): MonthGroup<T>[] {
+    const grouped = new Map<string, MonthGroup<T>>();
+    const fallbackItems: T[] = [];
+
+    for (const item of items) {
+        const date = getDate(item);
+        if (!date) {
+            fallbackItems.push(item);
+            continue;
+        }
+
+        const key = getMonthKey(date);
+        const existing = grouped.get(key);
+        if (existing) {
+            existing.items.push(item);
+            continue;
+        }
+
+        grouped.set(key, {
+            key,
+            label: getMonthLabel(date),
+            items: [item],
+        });
+    }
+
+    const groups = Array.from(grouped.values()).sort((a, b) => b.key.localeCompare(a.key));
+    if (fallbackLabel && fallbackItems.length > 0) {
+        groups.push({
+            key: "fallback-unknown",
+            label: fallbackLabel,
+            items: fallbackItems,
+        });
+    }
+
+    return groups;
+}
+
+function syncOpenMonthKeys(currentKeys: string[], availableKeys: string[]): string[] {
+    const nextKeys = currentKeys.filter((key) => availableKeys.includes(key));
+    if (nextKeys.length > 0) {
+        return nextKeys;
+    }
+    return availableKeys.slice(0, 1);
 }
 
 function getAbsenceReportTypeBadge(reportType: "ABSENCE" | "LATE") {
@@ -58,6 +139,8 @@ export function HistoryView() {
     const [directCandidates, setDirectCandidates] = useState<SlotSearchResult[]>([]);
     const [selectedDirectSlotId, setSelectedDirectSlotId] = useState<string>("");
     const [isLoadingDirectCandidates, setIsLoadingDirectCandidates] = useState(false);
+    const [openAbsenceMonths, setOpenAbsenceMonths] = useState<string[]>([]);
+    const [openRequestMonths, setOpenRequestMonths] = useState<string[]>([]);
 
     const { data: absences, isLoading: loadingAbsences } = useQuery<EnrichedAbsence[]>({
         queryKey: ["/api/admin/absences"],
@@ -353,31 +436,96 @@ export function HistoryView() {
         });
     };
 
-    const filteredAbsences = absences?.filter(a =>
-        a.childName.toLowerCase().includes(searchTerm.toLowerCase())
-    ) || [];
+    const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+    const hasSearchTerm = normalizedSearchTerm.length > 0;
 
-    const filteredRequests = (requests?.filter(r =>
-        r.childName.toLowerCase().includes(searchTerm.toLowerCase())
-    ) || []).slice().sort((a, b) => {
-        const aCreatedAt = parseRequestCreatedAt(a.createdAt);
-        const bCreatedAt = parseRequestCreatedAt(b.createdAt);
+    const filteredAbsences = (absences || []).filter((absence) =>
+        absence.childName.toLowerCase().includes(normalizedSearchTerm)
+    );
 
-        if (aCreatedAt === null && bCreatedAt === null) {
-            return b.id.localeCompare(a.id);
+    const sortedAbsences = filteredAbsences.slice().sort((a, b) => {
+        const aAbsentDate = formatJstDate(a.absentDate);
+        const bAbsentDate = formatJstDate(b.absentDate);
+        const absentDateCompare = bAbsentDate.localeCompare(aAbsentDate);
+        if (absentDateCompare !== 0) {
+            return absentDateCompare;
         }
-        if (aCreatedAt === null) {
-            return 1;
-        }
-        if (bCreatedAt === null) {
-            return -1;
-        }
-        if (aCreatedAt !== bCreatedAt) {
-            return bCreatedAt - aCreatedAt;
+
+        const createdAtCompare = compareNullableTimestampsDesc(a.createdAt, b.createdAt);
+        if (createdAtCompare !== 0) {
+            return createdAtCompare;
         }
 
         return b.id.localeCompare(a.id);
     });
+
+    const absenceGroups = groupItemsByMonth(sortedAbsences, (absence) => absence.absentDate);
+    const absenceGroupKeys = absenceGroups.map((group) => group.key);
+    const absenceGroupSignature = absenceGroupKeys.join("|");
+
+    const filteredRequests = (requests || []).filter((request) =>
+        request.childName.toLowerCase().includes(normalizedSearchTerm)
+    );
+
+    const sortedRequests = filteredRequests.slice().sort((a, b) => {
+        if (!a.toSlotDate && !b.toSlotDate) {
+            const createdAtCompare = compareNullableTimestampsDesc(a.createdAt, b.createdAt);
+            if (createdAtCompare !== 0) {
+                return createdAtCompare;
+            }
+
+            return b.id.localeCompare(a.id);
+        }
+        if (!a.toSlotDate) {
+            return 1;
+        }
+        if (!b.toSlotDate) {
+            return -1;
+        }
+
+        const slotDateCompare = b.toSlotDate.localeCompare(a.toSlotDate);
+        if (slotDateCompare !== 0) {
+            return slotDateCompare;
+        }
+
+        const aStartTime = a.toSlotStartTime || "";
+        const bStartTime = b.toSlotStartTime || "";
+        if (aStartTime !== bStartTime) {
+            return bStartTime.localeCompare(aStartTime);
+        }
+
+        const createdAtCompare = compareNullableTimestampsDesc(a.createdAt, b.createdAt);
+        if (createdAtCompare !== 0) {
+            return createdAtCompare;
+        }
+
+        return b.id.localeCompare(a.id);
+    });
+
+    const requestGroups = groupItemsByMonth(
+        sortedRequests,
+        (request) => request.toSlotDate,
+        "振替先未設定",
+    );
+    const requestGroupKeys = requestGroups.map((group) => group.key);
+    const requestGroupSignature = requestGroupKeys.join("|");
+
+    useEffect(() => {
+        if (hasSearchTerm) {
+            return;
+        }
+        setOpenAbsenceMonths((currentKeys) => syncOpenMonthKeys(currentKeys, absenceGroupKeys));
+    }, [absenceGroupSignature, hasSearchTerm]);
+
+    useEffect(() => {
+        if (hasSearchTerm) {
+            return;
+        }
+        setOpenRequestMonths((currentKeys) => syncOpenMonthKeys(currentKeys, requestGroupKeys));
+    }, [requestGroupSignature, hasSearchTerm]);
+
+    const displayedOpenAbsenceMonths = hasSearchTerm ? absenceGroupKeys : openAbsenceMonths;
+    const displayedOpenRequestMonths = hasSearchTerm ? requestGroupKeys : openRequestMonths;
 
     const getStatusBadge = (status: string) => {
         switch (status) {
@@ -398,6 +546,118 @@ export function HistoryView() {
                 return <Badge variant="outline">{status}</Badge>;
         }
     };
+
+    const renderAbsenceTable = (items: EnrichedAbsence[]) => (
+        <div className="overflow-x-auto">
+            <Table>
+                <TableHeader>
+                    <TableRow>
+                        <TableHead>お子様名</TableHead>
+                        <TableHead>クラス</TableHead>
+                        <TableHead>区分</TableHead>
+                        <TableHead>欠席日</TableHead>
+                        <TableHead>レッスン</TableHead>
+                        <TableHead>ステータス</TableHead>
+                        <TableHead>確認コード</TableHead>
+                        <TableHead>理由</TableHead>
+                        <TableHead>操作</TableHead>
+                    </TableRow>
+                </TableHeader>
+                <TableBody>
+                    {items.map((absence) => (
+                        <TableRow key={absence.id}>
+                            <TableCell className="font-medium">{absence.childName}</TableCell>
+                            <TableCell>{absence.declaredClassBand}</TableCell>
+                            <TableCell>{getAbsenceReportTypeBadge(absence.reportType)}</TableCell>
+                            <TableCell>{formatJstDay(absence.absentDate)}</TableCell>
+                            <TableCell>
+                                {absence.courseLabel && absence.startTime
+                                    ? `${absence.courseLabel} ${absence.startTime}`
+                                    : "-"}
+                            </TableCell>
+                            <TableCell>
+                                {absence.reportType === "LATE"
+                                    ? <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300">遅刻連絡</Badge>
+                                    : getStatusBadge(absence.makeupStatus)}
+                            </TableCell>
+                            <TableCell className="font-mono text-sm">{absence.confirmCode}</TableCell>
+                            <TableCell>{absence.reason?.trim() || "-"}</TableCell>
+                            <TableCell>
+                                <div className="flex items-center gap-2">
+                                    {absence.makeupStatus === "PENDING" && absence.reportType === "ABSENCE" && (
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => openAdminBookingDialog(absence)}
+                                            disabled={bookFromAbsenceMutation.isPending || bookWithoutAbsenceMutation.isPending}
+                                        >
+                                            振替登録
+                                        </Button>
+                                    )}
+                                    {(absence.makeupStatus === "PENDING" || absence.makeupStatus === "MAKEUP_CONFIRMED") && (
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => handleCancelAbsence(absence)}
+                                            disabled={cancelAbsenceMutation.isPending}
+                                            className="text-destructive hover:text-destructive"
+                                        >
+                                            <XIcon className="w-4 h-4" />
+                                        </Button>
+                                    )}
+                                </div>
+                            </TableCell>
+                        </TableRow>
+                    ))}
+                </TableBody>
+            </Table>
+        </div>
+    );
+
+    const renderRequestTable = (items: EnrichedRequest[]) => (
+        <div className="overflow-x-auto">
+            <Table>
+                <TableHeader>
+                    <TableRow>
+                        <TableHead>お子様名</TableHead>
+                        <TableHead>クラス</TableHead>
+                        <TableHead>欠席日</TableHead>
+                        <TableHead>振替先</TableHead>
+                        <TableHead>ステータス</TableHead>
+                        <TableHead>操作</TableHead>
+                    </TableRow>
+                </TableHeader>
+                <TableBody>
+                    {items.map((request) => (
+                        <TableRow key={request.id}>
+                            <TableCell className="font-medium">{request.childName}</TableCell>
+                            <TableCell>{request.declaredClassBand}</TableCell>
+                            <TableCell>{formatJstDay(request.absentDate)}</TableCell>
+                            <TableCell>
+                                {request.toSlotDate && request.toSlotStartTime
+                                    ? `${format(parseJstDate(request.toSlotDate), "M/d(E)", { locale: ja })} ${request.toSlotStartTime}`
+                                    : "-"}
+                            </TableCell>
+                            <TableCell>{getStatusBadge(request.status)}</TableCell>
+                            <TableCell>
+                                {request.status === "確定" && (
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleCancelRequest(request)}
+                                        disabled={cancelRequestMutation.isPending}
+                                        className="text-destructive hover:text-destructive"
+                                    >
+                                        <XIcon className="w-4 h-4" />
+                                    </Button>
+                                )}
+                            </TableCell>
+                        </TableRow>
+                    ))}
+                </TableBody>
+            </Table>
+        </div>
+    );
 
     return (
         <Card className="border-2">
@@ -446,73 +706,33 @@ export function HistoryView() {
                             <div className="flex justify-center py-8">
                                 <Loader2 className="w-6 h-6 animate-spin" />
                             </div>
-                        ) : filteredAbsences.length === 0 ? (
+                        ) : absenceGroups.length === 0 ? (
                             <p className="text-center text-muted-foreground py-8">欠席・遅刻データがありません</p>
                         ) : (
-                            <div className="overflow-x-auto">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>お子様名</TableHead>
-                                            <TableHead>クラス</TableHead>
-                                            <TableHead>区分</TableHead>
-                                            <TableHead>欠席日</TableHead>
-                                            <TableHead>レッスン</TableHead>
-                                            <TableHead>ステータス</TableHead>
-                                            <TableHead>確認コード</TableHead>
-                                            <TableHead>理由</TableHead>
-                                            <TableHead>操作</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {filteredAbsences.map((absence) => (
-                                            <TableRow key={absence.id}>
-                                                <TableCell className="font-medium">{absence.childName}</TableCell>
-                                                <TableCell>{absence.declaredClassBand}</TableCell>
-                                                <TableCell>{getAbsenceReportTypeBadge(absence.reportType)}</TableCell>
-                                                <TableCell>{formatJstDay(absence.absentDate)}</TableCell>
-                                                <TableCell>
-                                                    {absence.courseLabel && absence.startTime
-                                                        ? `${absence.courseLabel} ${absence.startTime}`
-                                                        : "-"}
-                                                </TableCell>
-                                                <TableCell>
-                                                    {absence.reportType === "LATE"
-                                                        ? <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300">遅刻連絡</Badge>
-                                                        : getStatusBadge(absence.makeupStatus)}
-                                                </TableCell>
-                                                <TableCell className="font-mono text-sm">{absence.confirmCode}</TableCell>
-                                                <TableCell>{absence.reason?.trim() || "-"}</TableCell>
-                                                <TableCell>
-                                                    <div className="flex items-center gap-2">
-                                                        {absence.makeupStatus === "PENDING" && absence.reportType === "ABSENCE" && (
-                                                            <Button
-                                                                variant="outline"
-                                                                size="sm"
-                                                                onClick={() => openAdminBookingDialog(absence)}
-                                                                disabled={bookFromAbsenceMutation.isPending || bookWithoutAbsenceMutation.isPending}
-                                                            >
-                                                                振替登録
-                                                            </Button>
-                                                        )}
-                                                        {(absence.makeupStatus === "PENDING" || absence.makeupStatus === "MAKEUP_CONFIRMED") && (
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="sm"
-                                                                onClick={() => handleCancelAbsence(absence)}
-                                                                disabled={cancelAbsenceMutation.isPending}
-                                                                className="text-destructive hover:text-destructive"
-                                                            >
-                                                                <XIcon className="w-4 h-4" />
-                                                            </Button>
-                                                        )}
-                                                    </div>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </div>
+                            <Accordion
+                                type="multiple"
+                                value={displayedOpenAbsenceMonths}
+                                onValueChange={setOpenAbsenceMonths}
+                                className="space-y-4"
+                            >
+                                {absenceGroups.map((group) => (
+                                    <AccordionItem
+                                        key={group.key}
+                                        value={group.key}
+                                        className="overflow-hidden rounded-lg border bg-background"
+                                    >
+                                        <AccordionTrigger className="px-4 py-3 text-left hover:no-underline">
+                                            <div className="flex flex-1 items-center justify-between gap-4 pr-4">
+                                                <span className="text-base font-semibold">{group.label}</span>
+                                                <span className="text-sm text-muted-foreground">{group.items.length}件</span>
+                                            </div>
+                                        </AccordionTrigger>
+                                        <AccordionContent>
+                                            <div className="px-4">{renderAbsenceTable(group.items)}</div>
+                                        </AccordionContent>
+                                    </AccordionItem>
+                                ))}
+                            </Accordion>
                         )}
                     </>
                 )}
@@ -523,51 +743,33 @@ export function HistoryView() {
                             <div className="flex justify-center py-8">
                                 <Loader2 className="w-6 h-6 animate-spin" />
                             </div>
-                        ) : filteredRequests.length === 0 ? (
+                        ) : requestGroups.length === 0 ? (
                             <p className="text-center text-muted-foreground py-8">振替データがありません</p>
                         ) : (
-                            <div className="overflow-x-auto">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>お子様名</TableHead>
-                                            <TableHead>クラス</TableHead>
-                                            <TableHead>欠席日</TableHead>
-                                            <TableHead>振替先</TableHead>
-                                            <TableHead>ステータス</TableHead>
-                                            <TableHead>操作</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {filteredRequests.map((request) => (
-                                            <TableRow key={request.id}>
-                                                <TableCell className="font-medium">{request.childName}</TableCell>
-                                                <TableCell>{request.declaredClassBand}</TableCell>
-                                                <TableCell>{formatJstDay(request.absentDate)}</TableCell>
-                                                <TableCell>
-                                                    {request.toSlotDate && request.toSlotStartTime
-                                                        ? `${format(parseJstDate(request.toSlotDate), "M/d(E)", { locale: ja })} ${request.toSlotStartTime}`
-                                                        : "-"}
-                                                </TableCell>
-                                                <TableCell>{getStatusBadge(request.status)}</TableCell>
-                                                <TableCell>
-                                                    {request.status === "確定" && (
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="sm"
-                                                            onClick={() => handleCancelRequest(request)}
-                                                            disabled={cancelRequestMutation.isPending}
-                                                            className="text-destructive hover:text-destructive"
-                                                        >
-                                                            <XIcon className="w-4 h-4" />
-                                                        </Button>
-                                                    )}
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </div>
+                            <Accordion
+                                type="multiple"
+                                value={displayedOpenRequestMonths}
+                                onValueChange={setOpenRequestMonths}
+                                className="space-y-4"
+                            >
+                                {requestGroups.map((group) => (
+                                    <AccordionItem
+                                        key={group.key}
+                                        value={group.key}
+                                        className="overflow-hidden rounded-lg border bg-background"
+                                    >
+                                        <AccordionTrigger className="px-4 py-3 text-left hover:no-underline">
+                                            <div className="flex flex-1 items-center justify-between gap-4 pr-4">
+                                                <span className="text-base font-semibold">{group.label}</span>
+                                                <span className="text-sm text-muted-foreground">{group.items.length}件</span>
+                                            </div>
+                                        </AccordionTrigger>
+                                        <AccordionContent>
+                                            <div className="px-4">{renderRequestTable(group.items)}</div>
+                                        </AccordionContent>
+                                    </AccordionItem>
+                                ))}
+                            </Accordion>
                         )}
                     </>
                 )}
