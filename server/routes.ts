@@ -2482,11 +2482,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const existingDateISO = formatJstDate(existing.date);
+      const existingClassBand = existing.classBand as "初級" | "中級" | "上級";
+      const existingCanonicalSlotId = buildCanonicalSlotId(existingDateISO, existing.startTime, existingClassBand);
       const targetDateISO = data.date || existingDateISO;
       const targetStartTime = data.startTime || existing.startTime;
-      const targetClassBand = (data.classBand || existing.classBand) as "初級" | "中級" | "上級";
+      const targetClassBand = (data.classBand || existingClassBand) as "初級" | "中級" | "上級";
       const targetSlotId = buildCanonicalSlotId(targetDateISO, targetStartTime, targetClassBand);
-      const keyFieldsChanged = targetSlotId !== existing.id;
+      const keyFieldsChanged = targetSlotId !== existingCanonicalSlotId;
 
       const updateData: any = {};
       if (data.date) updateData.date = parseJstDate(data.date);
