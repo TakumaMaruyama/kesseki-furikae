@@ -81,6 +81,11 @@ type ClosureValidationResult = {
 };
 
 const CLASS_BANDS: Array<"初級" | "中級" | "上級"> = ["初級", "中級", "上級"];
+const EMAIL_NOTICE_START_ISO = "2026-04-13";
+const EMAIL_NOTICE_END_ISO = "2026-04-17";
+const EMAIL_NOTICE_MESSAGE = "2026年4月13日(月)〜4月17日(金)は、通知用メールアドレスを入力しても、確認コードや欠席・遅刻完了通知メールが届かない場合があります。確認コードは画面上で必ず保存してください。";
+const EMAIL_FIELD_NOTICE_MESSAGE = "現在はメールが届かない場合があります。確認コードは画面表示を保存してください。";
+const EMAIL_CONFIRM_NOTICE_MESSAGE = "メールアドレスを入力した場合も、現在は確認コードがメールで届かない場合があります";
 
 function getReportTypeLabel(reportType: ReportType): string {
   return reportType === "LATE" ? "遅刻" : "欠席";
@@ -181,6 +186,9 @@ export default function ParentPage() {
   const optionalReasonValue = absenceForm.watch("reason");
   const optionalContactEmailValue = absenceForm.watch("contactEmail");
   const isOptionalSectionOpen = optionalOpen || !!optionalReasonValue?.trim() || !!optionalContactEmailValue?.trim();
+  const todayJst = formatJstDate(new Date());
+  const isEmailNoticeActive = todayJst >= EMAIL_NOTICE_START_ISO && todayJst <= EMAIL_NOTICE_END_ISO;
+  const showEmailNoticeBanner = isEmailNoticeActive && !absenceData && !token;
 
   useEffect(() => {
     if (isClosureMode && absenceForm.getValues("reportType") !== "ABSENCE") {
@@ -631,6 +639,13 @@ export default function ParentPage() {
       </header>
 
       <main className="container max-w-2xl px-4 py-8 md:py-12 space-y-8">
+        {showEmailNoticeBanner && (
+          <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4" data-testid="email-feature-notice">
+            <p className="mb-1 text-sm font-semibold text-yellow-800">重要なお知らせ</p>
+            <p className="text-sm text-yellow-700">{EMAIL_NOTICE_MESSAGE}</p>
+          </div>
+        )}
+
         {!absenceData && !token && (
           <Collapsible>
             <Card className="border-2 border-primary/20 bg-primary/5">
@@ -1021,7 +1036,9 @@ export default function ParentPage() {
                                 />
                               </FormControl>
                               <p className="text-xs text-muted-foreground">
-                                入力すると確認コードと{isLateReport ? "遅刻" : "欠席"}完了通知がメールで届きます
+                                {isEmailNoticeActive
+                                  ? EMAIL_FIELD_NOTICE_MESSAGE
+                                  : `入力すると確認コードと${isLateReport ? "遅刻" : "欠席"}完了通知がメールで届きます`}
                               </p>
                               <FormMessage />
                             </FormItem>
@@ -1367,7 +1384,7 @@ export default function ParentPage() {
             <ul className="list-disc list-inside space-y-1">
               <li>確認コードはスクリーンショットやメモで保存してください</li>
               <li>「予約確認」ページからコードを入力すると予約状況を確認できます</li>
-              <li>メールアドレスを入力した場合は、メールでも確認コードが届きます</li>
+              <li>{isEmailNoticeActive ? EMAIL_CONFIRM_NOTICE_MESSAGE : "メールアドレスを入力した場合は、メールでも確認コードが届きます"}</li>
             </ul>
           </div>
           <Button
