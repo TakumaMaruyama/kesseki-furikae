@@ -51,6 +51,7 @@ export default defineConfig(async () => {
         workbox: {
           cleanupOutdatedCaches: true,
           navigateFallback: "/index.html",
+          navigateFallbackDenylist: [/^\/api\//],
         },
       }),
     );
