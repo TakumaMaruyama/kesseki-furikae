@@ -94,6 +94,19 @@ function summarizeZodIssues(error: ZodError) {
   }));
 }
 
+function looksLikeLegacyAbsencePayload(body: unknown): boolean {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return false;
+  }
+
+  const top = body as Record<string, unknown>;
+  if ("items" in top) {
+    return false;
+  }
+
+  return "childName" in top || "declaredClassBand" in top || "absentDateISO" in top || "originalSlotId" in top;
+}
+
 async function getSlotAbsencesAndMakeups(slotId: string) {
   const slot = await storage.getClassSlotById(slotId);
 
@@ -118,6 +131,13 @@ type AbsenceEntryInput = {
 };
 
 type ReportType = "ABSENCE" | "LATE";
+
+type NormalAbsenceBatchPayload = {
+  reportType: ReportType;
+  items: AbsenceEntryInput[];
+  contactEmail?: string;
+  reason?: string;
+};
 
 type CreateAbsenceInternalOptions = {
   contactEmail: string | null;
@@ -164,6 +184,45 @@ function normalizeOptionalEmail(value: string | undefined | null): string | null
 
 function normalizeSharedCode(value: string): string {
   return value.trim().toUpperCase();
+}
+
+function parseNormalAbsenceBatchPayload(body: unknown): {
+  data: NormalAbsenceBatchPayload;
+  payloadMode: "batch" | "legacy-single";
+} {
+  const batchResult = createAbsencesBatchRequestSchema.safeParse(body);
+  if (batchResult.success) {
+    return {
+      data: batchResult.data,
+      payloadMode: "batch",
+    };
+  }
+
+  const singleResult = createAbsenceRequestSchema.safeParse(body);
+  if (singleResult.success) {
+    const singleData = singleResult.data;
+    return {
+      data: {
+        reportType: singleData.reportType,
+        contactEmail: singleData.contactEmail,
+        reason: singleData.reason,
+        items: [{
+          childId: singleData.childId,
+          childName: singleData.childName,
+          declaredClassBand: singleData.declaredClassBand,
+          absentDateISO: singleData.absentDateISO,
+          originalSlotId: singleData.originalSlotId,
+        }],
+      },
+      payloadMode: "legacy-single",
+    };
+  }
+
+  if (looksLikeLegacyAbsencePayload(body)) {
+    throw singleResult.error;
+  }
+
+  throw batchResult.error;
 }
 
 function resolveMakeupDeadline(baseDeadline: Date, cap?: Date): Date {
@@ -1402,6 +1461,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }
 
+  function buildBatchAbsenceResponseItems(createdAbsences: CreatedAbsenceInternal[]) {
+    return createdAbsences.map((item) => ({
+      absenceId: item.absenceId,
+      resumeToken: item.resumeToken,
+      confirmCode: item.confirmCode,
+      makeupDeadline: formatJstDate(item.makeupDeadline),
+      childName: item.childName,
+      declaredClassBand: item.declaredClassBand,
+      absentDateISO: item.absentDateISO,
+      reportType: item.reportType,
+    }));
+  }
+
+  async function createNormalAbsences(data: NormalAbsenceBatchPayload) {
+    const contactEmail = normalizeOptionalEmail(data.contactEmail);
+    const reason = normalizeOptionalText(data.reason);
+    const reportType = data.reportType;
+
+    const slotCount = await storage.countFutureSlots();
+    if (slotCount === 0) {
+      console.warn("⚠️ 振替可能なレッスン枠が登録されていません。欠席登録は受け付けますが、振替予約はできません。");
+    }
+
+    const createdAbsences = await db.transaction(async (tx) => {
+      const created: CreatedAbsenceInternal[] = [];
+      for (let index = 0; index < data.items.length; index += 1) {
+        const row = data.items[index];
+        try {
+          const item = await createAbsenceRecordInTransaction(tx, row, {
+            contactEmail,
+            reason,
+            reportType,
+            sourceType: "NORMAL",
+            closureEventId: null,
+            enforceBeforeStart: true,
+            decrementOriginalSlotCurrent: true,
+          });
+          created.push(item);
+        } catch (error: any) {
+          throw new BatchRowError(index, error.message || "登録に失敗しました。");
+        }
+      }
+      return created;
+    });
+
+    await sendAbsenceConfirmationEmails(contactEmail, createdAbsences);
+
+    return {
+      reportType,
+      contactEmail,
+      reason,
+      createdAbsences,
+    };
+  }
+
   app.post("/api/closure-events/validate-code", async (req, res) => {
     try {
       const data = validateClosureCodeRequestSchema.parse(req.body);
@@ -1569,56 +1683,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/absences/batch", async (req, res) => {
     try {
-      const data = createAbsencesBatchRequestSchema.parse(req.body);
-      const contactEmail = normalizeOptionalEmail(data.contactEmail);
-      const reason = normalizeOptionalText(data.reason);
-      const reportType = data.reportType;
-
-      const slotCount = await storage.countFutureSlots();
-      if (slotCount === 0) {
-        console.warn("⚠️ 振替可能なレッスン枠が登録されていません。欠席登録は受け付けますが、振替予約はできません。");
+      const { data, payloadMode } = parseNormalAbsenceBatchPayload(req.body);
+      if (payloadMode === "legacy-single") {
+        console.warn("Using legacy single payload compatibility path for /api/absences/batch", {
+          summary: summarizeAbsenceBatchBody(req.body),
+        });
       }
 
-      const createdAbsences = await db.transaction(async (tx) => {
-        const created: CreatedAbsenceInternal[] = [];
-        for (let index = 0; index < data.items.length; index += 1) {
-          const row = data.items[index];
-          try {
-            const item = await createAbsenceRecordInTransaction(tx, row, {
-              contactEmail,
-              reason,
-              reportType,
-              sourceType: "NORMAL",
-              closureEventId: null,
-              enforceBeforeStart: true,
-              decrementOriginalSlotCurrent: true,
-            });
-            created.push(item);
-          } catch (error: any) {
-            throw new BatchRowError(index, error.message || "登録に失敗しました。");
-          }
-        }
-        return created;
-      });
-
-      await sendAbsenceConfirmationEmails(contactEmail, createdAbsences);
+      const { createdAbsences } = await createNormalAbsences(data);
 
       res.json({
         success: true,
-        items: createdAbsences.map((item) => ({
-          absenceId: item.absenceId,
-          resumeToken: item.resumeToken,
-          confirmCode: item.confirmCode,
-          makeupDeadline: formatJstDate(item.makeupDeadline),
-          childName: item.childName,
-          declaredClassBand: item.declaredClassBand,
-          absentDateISO: item.absentDateISO,
-          reportType: item.reportType,
-        })),
+        items: buildBatchAbsenceResponseItems(createdAbsences),
       });
     } catch (error: any) {
       if (error instanceof ZodError) {
         console.warn("Invalid /api/absences/batch payload", {
+          preferredParser: looksLikeLegacyAbsencePayload(req.body) ? "legacy-single" : "batch",
           summary: summarizeAbsenceBatchBody(req.body),
           issues: summarizeZodIssues(error),
         });
@@ -1636,29 +1717,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/absences", async (req, res) => {
     try {
       const data = createAbsenceRequestSchema.parse(req.body);
-      const contactEmail = normalizeOptionalEmail(data.contactEmail);
-      const reason = normalizeOptionalText(data.reason);
-      const reportType = data.reportType;
-
-      const slotCount = await storage.countFutureSlots();
-      if (slotCount === 0) {
-        console.warn("⚠️ 振替可能なレッスン枠が登録されていません。欠席登録は受け付けますが、振替予約はできません。");
-      }
-
-      const [created] = await db.transaction(async (tx) => {
-        const item = await createAbsenceRecordInTransaction(tx, data, {
-          contactEmail,
-          reason,
-          reportType,
-          sourceType: "NORMAL",
-          closureEventId: null,
-          enforceBeforeStart: true,
-          decrementOriginalSlotCurrent: true,
-        });
-        return [item];
+      const { createdAbsences } = await createNormalAbsences({
+        reportType: data.reportType,
+        contactEmail: data.contactEmail,
+        reason: data.reason,
+        items: [data],
       });
-
-      await sendAbsenceConfirmationEmails(contactEmail, [created]);
+      const [created] = createdAbsences;
 
       res.json({
         success: true,
