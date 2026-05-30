@@ -31,9 +31,6 @@ export type DashboardStats = {
     todayAbsences: number;
     todayMakeups: number;
     pendingAbsences: number;
-    futureSlots: number;
-    latestFutureSlotDate: string | null;
-    daysUntilLastFutureSlot: number | null;
     todayLessons: number;
 };
 
