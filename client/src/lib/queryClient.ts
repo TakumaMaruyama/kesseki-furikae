@@ -36,6 +36,34 @@ async function readResponseBody(res: Response): Promise<ParsedResponseBody> {
   return { kind: "text", rawText, data: rawText };
 }
 
+function summarizeHtml(rawHtml: string): string | null {
+  const titleMatch = rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (titleMatch?.[1]) {
+    const title = titleMatch[1].replace(/\s+/g, " ").trim();
+    if (title) {
+      return title;
+    }
+  }
+
+  const h1Match = rawHtml.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  if (h1Match?.[1]) {
+    const h1 = h1Match[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (h1) {
+      return h1;
+    }
+  }
+
+  return null;
+}
+
+function formatHtmlApiError(res: Response, rawHtml: string): string {
+  const statusDetail = `${res.status}${res.statusText ? ` ${res.statusText}` : ""}${res.redirected ? ", redirected" : ""}`;
+  const summary = summarizeHtml(rawHtml);
+  return summary
+    ? `APIの代わりにHTMLが返されました (${statusDetail}): ${res.url} [${summary}]`
+    : `APIの代わりにHTMLが返されました (${statusDetail}): ${res.url}`;
+}
+
 function buildResponseError(res: Response, body: ParsedResponseBody): Error {
   let message: string | undefined;
 
@@ -44,7 +72,7 @@ function buildResponseError(res: Response, body: ParsedResponseBody): Error {
   } else if (body.kind === "text") {
     message = body.rawText;
   } else if (body.kind === "html") {
-    message = `APIの代わりにHTMLが返されました (${res.status} ${res.statusText}${res.redirected ? ", redirected" : ""}): ${res.url}`;
+    message = formatHtmlApiError(res, body.rawText);
   }
 
   if (!message && res.status === 401) {
@@ -69,7 +97,7 @@ function buildResponseError(res: Response, body: ParsedResponseBody): Error {
 
 function buildUnexpectedResponseError(res: Response, body: ParsedResponseBody): Error {
   const message = body.kind === "html"
-    ? `APIの代わりにHTMLが返されました (${res.status} ${res.statusText}${res.redirected ? ", redirected" : ""}): ${res.url}`
+    ? formatHtmlApiError(res, body.rawText)
     : `サーバーからJSON以外の応答が返されました (${res.status} ${res.statusText}${res.redirected ? ", redirected" : ""}): ${res.url}`;
   const error: any = new Error(message);
   error.status = res.status;

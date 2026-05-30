@@ -28,6 +28,7 @@ import { format, addDays } from "date-fns";
 import { ja } from "date-fns/locale";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
+import { ZodError } from "zod";
 import {
   addJstDays,
   endOfJstDay,
@@ -58,6 +59,39 @@ function generateConfirmCode(): string {
 
 function getCanonicalSlotStartDateTime(slot: { date: Date | string | number; startTime: string }): Date {
   return parseJstDateTime(formatJstDate(slot.date), slot.startTime);
+}
+
+function summarizeAbsenceBatchBody(body: unknown) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return {
+      bodyType: Array.isArray(body) ? "array" : typeof body,
+    };
+  }
+
+  const top = body as Record<string, unknown>;
+  const items = Array.isArray(top.items) ? top.items : null;
+  const firstItem =
+    items && items[0] && typeof items[0] === "object" && !Array.isArray(items[0])
+      ? (items[0] as Record<string, unknown>)
+      : null;
+
+  return {
+    topLevelKeys: Object.keys(top),
+    hasItemsArray: Array.isArray(top.items),
+    itemsLength: items?.length ?? null,
+    firstItemKeys: firstItem ? Object.keys(firstItem) : null,
+    reportTypeType: typeof top.reportType,
+    contactEmailType: typeof top.contactEmail,
+    reasonType: typeof top.reason,
+  };
+}
+
+function summarizeZodIssues(error: ZodError) {
+  return error.issues.map((issue) => ({
+    path: issue.path.join("."),
+    code: issue.code,
+    message: issue.message,
+  }));
 }
 
 async function getSlotAbsencesAndMakeups(slotId: string) {
@@ -1583,6 +1617,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })),
       });
     } catch (error: any) {
+      if (error instanceof ZodError) {
+        console.warn("Invalid /api/absences/batch payload", {
+          summary: summarizeAbsenceBatchBody(req.body),
+          issues: summarizeZodIssues(error),
+        });
+      }
       if (error instanceof BatchRowError) {
         return res.status(400).json({
           error: error.message,
