@@ -5,6 +5,9 @@ import { z } from "zod";
 
 const HIRAGANA_NAME_REGEX = /^[ぁ-ゖー 　]+$/;
 
+export const DEFAULT_RECURRING_SLOT_WEEKS = 52;
+export const MAX_RECURRING_SLOT_WEEKS = 156;
+
 // Session storage table for Replit Auth
 export const sessions = pgTable(
   "sessions",
@@ -419,7 +422,7 @@ export const createSlotRequestSchema = z.object({
     capacityCurrent: z.number().min(0),
   })),
   isRecurring: z.boolean().optional(),
-  recurringWeeks: z.number().min(1).max(52).optional(),
+  recurringWeeks: z.number().min(1).max(MAX_RECURRING_SLOT_WEEKS).optional(),
 });
 
 export const updateSlotRequestSchema = z.object({
