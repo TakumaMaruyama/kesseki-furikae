@@ -104,7 +104,13 @@ function looksLikeLegacyAbsencePayload(body: unknown): boolean {
     return false;
   }
 
-  return "childName" in top || "declaredClassBand" in top || "absentDateISO" in top || "originalSlotId" in top;
+  return (
+    "childName" in top ||
+    "declaredClassBand" in top ||
+    "classBand" in top ||
+    "absentDateISO" in top ||
+    "originalSlotId" in top
+  );
 }
 
 async function getSlotAbsencesAndMakeups(slotId: string) {

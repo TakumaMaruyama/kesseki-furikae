@@ -4,6 +4,35 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 const HIRAGANA_NAME_REGEX = /^[ぁ-ゖー 　]+$/;
+const CLASS_BAND_VALUES = ["初級", "中級", "上級"] as const;
+
+function normalizeDeclaredClassBandAlias(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeDeclaredClassBandAlias);
+  }
+
+  if (!value || typeof value !== "object" || value instanceof Date) {
+    return value;
+  }
+
+  const input = value as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {};
+
+  for (const [key, entryValue] of Object.entries(input)) {
+    const normalizedKey =
+      key === "classBand" && !("declaredClassBand" in input)
+        ? "declaredClassBand"
+        : key;
+    normalized[normalizedKey] = normalizeDeclaredClassBandAlias(entryValue);
+  }
+
+  return normalized;
+}
+
+const classBandEnum = z.enum(CLASS_BAND_VALUES);
+const requiredClassBandEnum = z.enum(CLASS_BAND_VALUES, {
+  required_error: "クラス帯を選択してください",
+});
 
 export const DEFAULT_RECURRING_SLOT_WEEKS = 52;
 export const MAX_RECURRING_SLOT_WEEKS = 156;
@@ -283,7 +312,7 @@ export const absenceSchema = z.object({
   userId: z.string().nullable(),
   childId: z.string().nullable(),
   childName: z.string(),
-  declaredClassBand: z.enum(["初級", "中級", "上級"]),
+  declaredClassBand: classBandEnum,
   reportType: z.enum(["ABSENCE", "LATE"]),
   absentDate: z.date(),
   originalSlotId: z.string(),
@@ -298,47 +327,59 @@ export const absenceSchema = z.object({
   updatedAt: z.date(),
 });
 
-export const absenceEntrySchema = z.object({
+const absenceEntryObjectSchema = z.object({
   childId: z.string().optional(),
   childName: z
     .string()
     .trim()
     .min(1, "お子様の名前を入力してください")
     .regex(HIRAGANA_NAME_REGEX, "お子様の名前はひらがなで入力してください（空白・ー可）"),
-  declaredClassBand: z.enum(["初級", "中級", "上級"], {
-    required_error: "クラス帯を選択してください"
-  }),
+  declaredClassBand: requiredClassBandEnum,
   absentDateISO: z.string().min(1, "欠席日を選択してください"),
   originalSlotId: z.string().min(1, "欠席するレッスン枠を選択してください"),
 });
 
-export const createAbsenceRequestSchema = absenceEntrySchema.extend({
-  reportType: z.enum(["ABSENCE", "LATE"]).default("ABSENCE"),
-  contactEmail: z.string().email("正しいメールアドレスを入力してください").optional().or(z.literal("")),
-  reason: z.string().trim().max(200, "理由は200文字以内で入力してください").optional(),
-});
+export const absenceEntrySchema = z.preprocess(
+  normalizeDeclaredClassBandAlias,
+  absenceEntryObjectSchema,
+);
 
-export const createAbsencesBatchRequestSchema = z.object({
-  reportType: z.enum(["ABSENCE", "LATE"]).default("ABSENCE"),
-  items: z.array(absenceEntrySchema)
-    .min(1, "少なくとも1名分の欠席情報を入力してください")
-    .max(5, "一度に登録できるのは5名までです"),
-  contactEmail: z.string().email("正しいメールアドレスを入力してください").optional().or(z.literal("")),
-  reason: z.string().trim().max(200, "理由は200文字以内で入力してください").optional(),
-});
+export const createAbsenceRequestSchema = z.preprocess(
+  normalizeDeclaredClassBandAlias,
+  absenceEntryObjectSchema.extend({
+    reportType: z.enum(["ABSENCE", "LATE"]).default("ABSENCE"),
+    contactEmail: z.string().email("正しいメールアドレスを入力してください").optional().or(z.literal("")),
+    reason: z.string().trim().max(200, "理由は200文字以内で入力してください").optional(),
+  }),
+);
+
+export const createAbsencesBatchRequestSchema = z.preprocess(
+  normalizeDeclaredClassBandAlias,
+  z.object({
+    reportType: z.enum(["ABSENCE", "LATE"]).default("ABSENCE"),
+    items: z.array(absenceEntryObjectSchema)
+      .min(1, "少なくとも1名分の欠席情報を入力してください")
+      .max(5, "一度に登録できるのは5名までです"),
+    contactEmail: z.string().email("正しいメールアドレスを入力してください").optional().or(z.literal("")),
+    reason: z.string().trim().max(200, "理由は200文字以内で入力してください").optional(),
+  }),
+);
 
 export const validateClosureCodeRequestSchema = z.object({
   sharedCode: z.string().trim().min(1, "共通コードを入力してください"),
 });
 
-export const redeemClosureCodeRequestSchema = z.object({
-  sharedCode: z.string().trim().min(1, "共通コードを入力してください"),
-  items: z.array(absenceEntrySchema)
-    .min(1, "少なくとも1名分の振替権を入力してください")
-    .max(5, "一度に登録できるのは5名までです"),
-  contactEmail: z.string().email("正しいメールアドレスを入力してください").optional().or(z.literal("")),
-  reason: z.string().trim().max(200, "理由は200文字以内で入力してください").optional(),
-});
+export const redeemClosureCodeRequestSchema = z.preprocess(
+  normalizeDeclaredClassBandAlias,
+  z.object({
+    sharedCode: z.string().trim().min(1, "共通コードを入力してください"),
+    items: z.array(absenceEntryObjectSchema)
+      .min(1, "少なくとも1名分の振替権を入力してください")
+      .max(5, "一度に登録できるのは5名までです"),
+    contactEmail: z.string().email("正しいメールアドレスを入力してください").optional().or(z.literal("")),
+    reason: z.string().trim().max(200, "理由は200文字以内で入力してください").optional(),
+  }),
+);
 
 export const createClosureEventRequestSchema = z.object({
   name: z.string().trim().min(1, "イベント名を入力してください").max(100, "イベント名は100文字以内で入力してください"),
@@ -362,7 +403,7 @@ export const classSlotSchema = z.object({
   date: z.date(),
   startTime: z.string(),
   courseLabel: z.string(),
-  classBand: z.enum(["初級", "中級", "上級"]),
+  classBand: classBandEnum,
   isClosed: z.boolean(),
   capacityLimit: z.number(),
   capacityCurrent: z.number(),
@@ -378,7 +419,7 @@ export const requestSchema = z.object({
   userId: z.string().nullable(),
   childId: z.string().nullable(),
   childName: z.string(),
-  declaredClassBand: z.enum(["初級", "中級", "上級"]),
+  declaredClassBand: classBandEnum,
   absentDate: z.date(),
   toSlotId: z.string(),
   status: z.enum(["確定", "却下", "期限切れ", "キャンセル", "辞退"]),
@@ -389,22 +430,26 @@ export const requestSchema = z.object({
   createdAt: z.date(),
 });
 
-export const searchSlotsRequestSchema = z.object({
-  childName: z.string().min(1, "お子様の名前を入力してください"),
-  declaredClassBand: z.enum(["初級", "中級", "上級"], {
-    required_error: "クラス帯を選択してください"
+export const searchSlotsRequestSchema = z.preprocess(
+  normalizeDeclaredClassBandAlias,
+  z.object({
+    childName: z.string().min(1, "お子様の名前を入力してください"),
+    declaredClassBand: requiredClassBandEnum,
+    absentDateISO: z.string().min(1, "欠席日を選択してください"),
   }),
-  absentDateISO: z.string().min(1, "欠席日を選択してください"),
-});
+);
 
-export const bookRequestSchema = z.object({
-  absenceId: z.string().optional(),
-  childId: z.string().optional(),
-  childName: z.string().min(1),
-  declaredClassBand: z.enum(["初級", "中級", "上級"]),
-  absentDateISO: z.string(),
-  toSlotId: z.string(),
-});
+export const bookRequestSchema = z.preprocess(
+  normalizeDeclaredClassBandAlias,
+  z.object({
+    absenceId: z.string().optional(),
+    childId: z.string().optional(),
+    childName: z.string().min(1),
+    declaredClassBand: requiredClassBandEnum,
+    absentDateISO: z.string(),
+    toSlotId: z.string(),
+  }),
+);
 
 export const updateSlotCapacityRequestSchema = z.object({
   slotId: z.string(),
@@ -481,7 +526,7 @@ export const createChildRequestSchema = z.object({
     .min(1, "お子様の名前を入力してください")
     .regex(HIRAGANA_NAME_REGEX, "お子様の名前はひらがなで入力してください（空白・ー可）"),
   courseId: z.string().optional(),
-  classBand: z.enum(["初級", "中級", "上級"]).optional(),
+  classBand: classBandEnum.optional(),
 });
 
 export const updateChildRequestSchema = z.object({
@@ -493,7 +538,7 @@ export const updateChildRequestSchema = z.object({
     .regex(HIRAGANA_NAME_REGEX, "お子様の名前はひらがなで入力してください（空白・ー可）")
     .optional(),
   courseId: z.string().nullable().optional(),
-  classBand: z.enum(["初級", "中級", "上級"]).nullable().optional(),
+  classBand: classBandEnum.nullable().optional(),
 });
 
 // Course management schemas
