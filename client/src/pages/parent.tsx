@@ -6,6 +6,7 @@ import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   createAbsencesBatchRequestSchema,
+  type CreateAbsenceRequest,
   type CreateAbsencesBatchRequest,
   type SearchSlotsRequest,
   type SlotSearchResult,
@@ -69,6 +70,14 @@ type BatchResultItem = {
   reportType: ReportType;
 };
 
+type SingleAbsenceSubmitResult = {
+  absenceId: string;
+  resumeToken: string;
+  confirmCode: string;
+  makeupDeadline: string;
+  reportType?: ReportType;
+};
+
 type ClosureValidationResult = {
   id: string;
   name: string;
@@ -106,6 +115,86 @@ const parseLocalDate = (dateStr: any) => {
 
 async function postJsonWithDetails(url: string, data: unknown): Promise<any> {
   return apiRequest("POST", url, data);
+}
+
+function buildSingleAbsencePayload(data: CreateAbsencesBatchRequest): CreateAbsenceRequest | null {
+  if (data.reportType !== "ABSENCE" || data.items.length !== 1) {
+    return null;
+  }
+
+  const [item] = data.items;
+  if (!item) {
+    return null;
+  }
+
+  return {
+    childId: item.childId,
+    childName: item.childName,
+    declaredClassBand: item.declaredClassBand,
+    absentDateISO: item.absentDateISO,
+    originalSlotId: item.originalSlotId,
+    reportType: data.reportType,
+    contactEmail: data.contactEmail,
+    reason: data.reason,
+  };
+}
+
+function shouldRetryBatchAbsenceAsSingle(error: any): boolean {
+  const message = String(error?.message || "");
+
+  if (message.includes("APIの代わりにHTMLが返されました")) {
+    return true;
+  }
+
+  if (error?.status === 403) {
+    return true;
+  }
+
+  if (error?.status !== 400) {
+    return false;
+  }
+
+  return (
+    /"expected":\s*"array"/.test(message) ||
+    /"received":\s*"undefined"/.test(message) ||
+    /"path":\s*\[\s*"items"/.test(message) ||
+    /少なくとも1名分の欠席情報/.test(message)
+  );
+}
+
+function normalizeSingleAbsenceResultAsBatch(
+  result: SingleAbsenceSubmitResult,
+  request: CreateAbsenceRequest,
+): { success: true; items: BatchResultItem[] } {
+  return {
+    success: true,
+    items: [{
+      absenceId: result.absenceId,
+      resumeToken: result.resumeToken,
+      confirmCode: result.confirmCode,
+      makeupDeadline: result.makeupDeadline,
+      childName: request.childName,
+      declaredClassBand: request.declaredClassBand,
+      absentDateISO: request.absentDateISO,
+      reportType: result.reportType || request.reportType || "ABSENCE",
+    }],
+  };
+}
+
+async function submitNormalAbsenceWithFallback(
+  data: CreateAbsencesBatchRequest,
+): Promise<{ success?: boolean; items: BatchResultItem[] }> {
+  try {
+    return await postJsonWithDetails("/api/absences/batch", data);
+  } catch (batchError: any) {
+    const singlePayload = buildSingleAbsencePayload(data);
+    if (!singlePayload || !shouldRetryBatchAbsenceAsSingle(batchError)) {
+      throw batchError;
+    }
+
+    const singleResult = await postJsonWithDetails("/api/absences", singlePayload) as SingleAbsenceSubmitResult;
+    return normalizeSingleAbsenceResultAsBatch(singleResult, singlePayload);
+  }
 }
 
 function buildResumeUrl(token: string): string {
@@ -440,11 +529,13 @@ export default function ParentPage() {
         }
       }
 
-      const endpoint = isClosureMode ? "/api/closure-events/redeem" : "/api/absences/batch";
-      const payload = isClosureMode
-        ? { ...data, reportType: "ABSENCE" as const, sharedCode: closureValidation?.sharedCode }
-        : data;
-      const result = await postJsonWithDetails(endpoint, payload);
+      const result = isClosureMode
+        ? await postJsonWithDetails("/api/closure-events/redeem", {
+            ...data,
+            reportType: "ABSENCE" as const,
+            sharedCode: closureValidation?.sharedCode,
+          })
+        : await submitNormalAbsenceWithFallback(data);
       const items = ((result?.items || []) as BatchResultItem[]).map((item) => ({
         ...item,
         reportType: item.reportType || data.reportType || "ABSENCE",
