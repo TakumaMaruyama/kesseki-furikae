@@ -51,6 +51,16 @@ export async function setupVite(app: Express, server: Server) {
 
   app.use(vite.middlewares);
   app.use("*", async (req, res, next) => {
+    if (req.path.startsWith("/api")) {
+      res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.path}` });
+      return;
+    }
+
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.status(404).type("text/plain").send(`Not Found: ${req.method} ${req.path}`);
+      return;
+    }
+
     const url = req.originalUrl;
 
     try {
@@ -87,8 +97,18 @@ export function serveStatic(app: Express) {
 
   app.use(express.static(distPath));
 
-  // fall through to index.html if the file doesn't exist
-  app.use("*", (_req, res) => {
+  // Only client-side navigation routes should fall through to index.html.
+  app.use("*", (req, res) => {
+    if (req.path.startsWith("/api")) {
+      res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.path}` });
+      return;
+    }
+
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.status(404).type("text/plain").send(`Not Found: ${req.method} ${req.path}`);
+      return;
+    }
+
     res.sendFile(path.resolve(distPath, "index.html"));
   });
 }
