@@ -1056,7 +1056,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin: Dashboard stats
   app.get("/api/admin/dashboard-stats", requireAdmin, async (req, res) => {
     try {
-      const today = startOfJstDay(new Date());
+      const now = new Date();
+      const today = startOfJstDay(now);
 
       // Get today's slots
       const todaySlots = await storage.getClassSlotsByDate(today);
@@ -1076,14 +1077,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allAbsences = await storage.getAllAbsences();
       const pendingAbsences = allAbsences.filter(a => a.makeupStatus === "PENDING" && a.reportType === "ABSENCE").length;
 
-      // Get future slots count
-      const futureSlots = await storage.countFutureSlots();
+      const futureSlotCandidates = await db.select({
+        date: classSlots.date,
+        startTime: classSlots.startTime,
+      })
+        .from(classSlots)
+        .where(and(
+          gte(classSlots.date, addJstDays(today, -1)),
+          eq(classSlots.isClosed, false),
+        ));
+
+      const futureOpenSlots = futureSlotCandidates.filter((slot) => {
+        const canonicalSlotStartDateTime = parseJstDateTime(formatJstDate(slot.date), slot.startTime);
+        return canonicalSlotStartDateTime >= now;
+      });
+
+      const futureSlots = futureOpenSlots.length;
+      const latestFutureSlotDate = futureOpenSlots.reduce<string | null>((latest, slot) => {
+        const slotDateISO = formatJstDate(slot.date);
+        if (!latest || slotDateISO > latest) {
+          return slotDateISO;
+        }
+        return latest;
+      }, null);
+      const daysUntilLastFutureSlot = latestFutureSlotDate
+        ? Math.round((startOfJstDay(parseJstDate(latestFutureSlotDate)).getTime() - today.getTime()) / (24 * 60 * 60 * 1000))
+        : null;
 
       res.json({
         todayAbsences,
         todayMakeups,
         pendingAbsences,
         futureSlots,
+        latestFutureSlotDate,
+        daysUntilLastFutureSlot,
         todayLessons: todaySlots.length,
       });
     } catch (error: any) {

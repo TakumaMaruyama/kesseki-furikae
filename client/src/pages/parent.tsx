@@ -105,24 +105,7 @@ const parseLocalDate = (dateStr: any) => {
 };
 
 async function postJsonWithDetails(url: string, data: unknown): Promise<any> {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-    credentials: "include",
-  });
-
-  const bodyText = await response.text();
-  const parsed = bodyText ? JSON.parse(bodyText) : {};
-  if (!response.ok) {
-    const error: any = new Error(parsed?.error || parsed?.message || "リクエストに失敗しました");
-    if (typeof parsed?.rowIndex === "number") {
-      error.rowIndex = parsed.rowIndex;
-    }
-    throw error;
-  }
-
-  return parsed;
+  return apiRequest("POST", url, data);
 }
 
 function buildResumeUrl(token: string): string {
@@ -226,8 +209,13 @@ export default function ParentPage() {
       const slots = (response?.slots || []) as ClassSlotOption[];
       setSlotOptionsByKey((prev) => ({ ...prev, [key]: slots }));
       return slots;
-    } catch {
+    } catch (error: any) {
       setSlotOptionsByKey((prev) => ({ ...prev, [key]: [] }));
+      toast({
+        title: "レッスン枠の取得に失敗しました",
+        description: error?.message || "対象日のレッスン枠を読み込めませんでした。",
+        variant: "destructive",
+      });
       return [] as ClassSlotOption[];
     } finally {
       setLoadingSlotKeys((prev) => {

@@ -9,8 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { ClassSlot, Course } from "@shared/schema";
-import { formatJstDate } from "@shared/jst";
+import { DEFAULT_RECURRING_SLOT_WEEKS, MAX_RECURRING_SLOT_WEEKS, type ClassSlot, type Course } from "@shared/schema";
+import { addJstDays, formatJstDate, parseJstDate } from "@shared/jst";
 
 export type SlotDialogProps = {
     slot: ClassSlot | null;
@@ -34,7 +34,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                 courseLabel: z.string().min(1, "コース名を入力してください"),
                 classBands: z.array(z.enum(["初級", "中級", "上級"])).min(1, "少なくとも1つのクラス帯を選択してください"),
                 isRecurring: z.boolean().optional(),
-                recurringWeeks: z.number().min(1).max(52).optional(),
+                recurringWeeks: z.number().min(1).max(MAX_RECURRING_SLOT_WEEKS).optional(),
                 applyToFuture: z.boolean().optional(),
             })
         ),
@@ -46,7 +46,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                 courseLabel: slot.courseLabel,
                 classBands: [slot.classBand],
                 isRecurring: false,
-                recurringWeeks: 12,
+                recurringWeeks: DEFAULT_RECURRING_SLOT_WEEKS,
                 applyToFuture: false,
             }
             : {
@@ -56,7 +56,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                 courseLabel: "",
                 classBands: [],
                 isRecurring: false,
-                recurringWeeks: 12,
+                recurringWeeks: DEFAULT_RECURRING_SLOT_WEEKS,
                 applyToFuture: false,
             },
     });
@@ -86,7 +86,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                 courseLabel: slot.courseLabel,
                 classBands: [slot.classBand],
                 isRecurring: false,
-                recurringWeeks: 12,
+                recurringWeeks: DEFAULT_RECURRING_SLOT_WEEKS,
                 applyToFuture: false,
             });
         } else {
@@ -97,13 +97,22 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                 courseLabel: "",
                 classBands: [],
                 isRecurring: false,
-                recurringWeeks: 12,
+                recurringWeeks: DEFAULT_RECURRING_SLOT_WEEKS,
                 applyToFuture: false,
             });
         }
     }, [slot, open]);
 
     const selectedBands = form.watch("classBands") || [];
+    const recurringStartDate = form.watch("date");
+    const recurringWeeks = form.watch("recurringWeeks");
+    const recurringEndDateISO =
+        recurringStartDate
+        && typeof recurringWeeks === "number"
+        && Number.isFinite(recurringWeeks)
+        && recurringWeeks > 0
+            ? formatJstDate(addJstDays(parseJstDate(recurringStartDate), (recurringWeeks - 1) * 7))
+            : null;
 
     // クラス帯が選択されたときにデフォルト値を設定
     const handleClassBandChange = (band: string, checked: boolean) => {
@@ -362,13 +371,20 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                                                         {...field}
                                                         type="number"
                                                         min="1"
-                                                        max="52"
-                                                        onChange={(e) => field.onChange(parseInt(e.target.value))}
+                                                        max={MAX_RECURRING_SLOT_WEEKS}
+                                                        onChange={(e) => {
+                                                            const value = e.target.value;
+                                                            field.onChange(value === "" ? undefined : parseInt(value, 10));
+                                                        }}
                                                         data-testid="input-recurring-weeks"
                                                     />
                                                 </FormControl>
                                                 <p className="text-xs text-muted-foreground">
-                                                    {field.value}週間分の枠を作成します
+                                                    {field.value || 0}週間分の枠を作成します
+                                                    {recurringEndDateISO ? `（最終作成日: ${recurringEndDateISO}）` : ""}
+                                                </p>
+                                                <p className="text-xs text-muted-foreground">
+                                                    1回で最大{MAX_RECURRING_SLOT_WEEKS}週間分まで作成できます
                                                 </p>
                                                 <FormMessage />
                                             </FormItem>
