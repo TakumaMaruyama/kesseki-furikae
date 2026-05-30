@@ -5,6 +5,8 @@ type ParsedResponseBody =
   | { kind: "json"; rawText: string; data: any }
   | { kind: "html" | "text"; rawText: string; data: string };
 
+const API_HTML_RECOVERY_KEY = "__api_html_recovery_attempted__";
+
 async function readResponseBody(res: Response): Promise<ParsedResponseBody> {
   const rawText = await res.text();
   if (!rawText) {
@@ -42,7 +44,7 @@ function buildResponseError(res: Response, body: ParsedResponseBody): Error {
   } else if (body.kind === "text") {
     message = body.rawText;
   } else if (body.kind === "html") {
-    message = `APIの代わりにHTMLが返されました: ${res.url}`;
+    message = `APIの代わりにHTMLが返されました (${res.status} ${res.statusText}${res.redirected ? ", redirected" : ""}): ${res.url}`;
   }
 
   if (!message && res.status === 401) {
@@ -67,11 +69,65 @@ function buildResponseError(res: Response, body: ParsedResponseBody): Error {
 
 function buildUnexpectedResponseError(res: Response, body: ParsedResponseBody): Error {
   const message = body.kind === "html"
-    ? `APIの代わりにHTMLが返されました: ${res.url}`
-    : `サーバーからJSON以外の応答が返されました: ${res.url}`;
+    ? `APIの代わりにHTMLが返されました (${res.status} ${res.statusText}${res.redirected ? ", redirected" : ""}): ${res.url}`
+    : `サーバーからJSON以外の応答が返されました (${res.status} ${res.statusText}${res.redirected ? ", redirected" : ""}): ${res.url}`;
   const error: any = new Error(message);
   error.status = res.status;
   return error;
+}
+
+function isApiUrl(url: string): boolean {
+  return url.startsWith("/api/") || url.includes("/api/");
+}
+
+async function recoverFromStaleClientCache(): Promise<boolean> {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    if (sessionStorage.getItem(API_HTML_RECOVERY_KEY) === "1") {
+      return false;
+    }
+    sessionStorage.setItem(API_HTML_RECOVERY_KEY, "1");
+  } catch {
+    return false;
+  }
+
+  let recovered = false;
+
+  if ("serviceWorker" in navigator) {
+    try {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(
+        registrations.map(async (registration) => {
+          recovered = (await registration.unregister()) || recovered;
+        }),
+      );
+    } catch {
+      // Ignore SW cleanup failures and continue with cache cleanup.
+    }
+  }
+
+  if ("caches" in window) {
+    try {
+      const cacheKeys = await caches.keys();
+      if (cacheKeys.length > 0) {
+        recovered = true;
+      }
+      await Promise.all(cacheKeys.map((cacheKey) => caches.delete(cacheKey)));
+    } catch {
+      // Ignore cache cleanup failures and still fall back to a manual retry message.
+    }
+  }
+
+  if (recovered) {
+    window.setTimeout(() => {
+      window.location.reload();
+    }, 100);
+  }
+
+  return recovered;
 }
 
 export async function apiRequest(
@@ -87,6 +143,13 @@ export async function apiRequest(
   });
 
   const body = await readResponseBody(res);
+
+  if (isApiUrl(url) && body.kind === "html") {
+    const recovered = await recoverFromStaleClientCache();
+    if (recovered) {
+      throw new Error("古いアプリキャッシュを更新しています。自動で再読み込みしない場合は、ページを開き直してもう一度お試しください。");
+    }
+  }
 
   if (!res.ok) {
     throw buildResponseError(res, body);
@@ -118,6 +181,16 @@ export const getQueryFn: <T>(options: {
     }
 
     const body = await readResponseBody(res);
+
+    if (body.kind === "html") {
+      const queryUrl = queryKey.join("/") as string;
+      if (isApiUrl(queryUrl)) {
+        const recovered = await recoverFromStaleClientCache();
+        if (recovered) {
+          throw new Error("古いアプリキャッシュを更新しています。自動で再読み込みしない場合は、ページを開き直してもう一度お試しください。");
+        }
+      }
+    }
 
     if (!res.ok) {
       throw buildResponseError(res, body);
