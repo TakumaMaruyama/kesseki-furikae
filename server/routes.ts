@@ -41,6 +41,10 @@ import {
 import { getActualCurrent, getRemainingCapacity, hasRemainingCapacity } from "@shared/capacity";
 import { buildCanonicalSlotId } from "@shared/slotId";
 import { createClassSlots } from "./slotCreation";
+import {
+  reconcileDriftedSlotIdConflict,
+  SLOT_ID_REKEY_TARGET_EXISTS,
+} from "./slotIdReconciliation";
 
 // Admin authentication middleware
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -60,6 +64,88 @@ function generateConfirmCode(): string {
 
 function getCanonicalSlotStartDateTime(slot: { date: Date | string | number; startTime: string }): Date {
   return parseJstDateTime(formatJstDate(slot.date), slot.startTime);
+}
+
+async function rekeyDriftedSlotId(args: {
+  currentSlot: typeof classSlots.$inferSelect;
+  targetSlotId: string;
+  targetSlotStartDateTime: Date;
+}) {
+  await db.transaction(async (tx) => {
+    const [currentSlot] = await tx
+      .select()
+      .from(classSlots)
+      .where(eq(classSlots.id, args.currentSlot.id))
+      .limit(1);
+
+    if (!currentSlot) {
+      return;
+    }
+
+    if (currentSlot.id === args.targetSlotId) {
+      return;
+    }
+
+    const conflictingTarget = await tx
+      .select({ id: classSlots.id })
+      .from(classSlots)
+      .where(eq(classSlots.id, args.targetSlotId))
+      .limit(1);
+
+    if (conflictingTarget.length > 0) {
+      throw new Error(SLOT_ID_REKEY_TARGET_EXISTS);
+    }
+
+    await tx
+      .insert(classSlots)
+      .values({
+        id: args.targetSlotId,
+        date: currentSlot.date,
+        startTime: currentSlot.startTime,
+        courseLabel: currentSlot.courseLabel,
+        classBand: currentSlot.classBand,
+        isClosed: currentSlot.isClosed,
+        capacityLimit: currentSlot.capacityLimit,
+        capacityCurrent: currentSlot.capacityCurrent,
+        capacityMakeupUsed: currentSlot.capacityMakeupUsed || 0,
+        waitlistCount: currentSlot.waitlistCount || 0,
+        lessonStartDateTime: args.targetSlotStartDateTime,
+        lastNotifiedRequestId: currentSlot.lastNotifiedRequestId || null,
+        createdAt: currentSlot.createdAt,
+        updatedAt: new Date(),
+      });
+
+    await tx
+      .update(requests)
+      .set({
+        toSlotId: args.targetSlotId,
+        toSlotStartDateTime: args.targetSlotStartDateTime,
+      })
+      .where(eq(requests.toSlotId, currentSlot.id));
+
+    await tx
+      .update(absences)
+      .set({
+        originalSlotId: args.targetSlotId,
+        updatedAt: new Date(),
+      })
+      .where(eq(absences.originalSlotId, currentSlot.id));
+
+    await tx
+      .update(closureEventSlots)
+      .set({ slotId: args.targetSlotId })
+      .where(eq(closureEventSlots.slotId, currentSlot.id));
+
+    await tx
+      .update(trialParticipants)
+      .set({
+        slotId: args.targetSlotId,
+        updatedAt: new Date(),
+      })
+      .where(eq(trialParticipants.slotId, currentSlot.id));
+
+    await tx.delete(classSlots).where(eq(classSlots.id, currentSlot.id));
+  });
 }
 
 function summarizeAbsenceBatchBody(body: unknown) {
@@ -2485,8 +2571,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/create-slot", requireAdmin, async (req, res) => {
     try {
       const data = createSlotRequestSchema.parse(req.body);
+      let autoRepairedCount = 0;
       const { createdSlots, skippedCount } = await createClassSlots({
-        getClassSlotById: (id) => storage.getClassSlotById(id),
+        getClassSlotById: async (id) => {
+          const reconciliation = await reconcileDriftedSlotIdConflict({
+            getClassSlotById: (slotId) => storage.getClassSlotById(slotId),
+            rekeySlotId: (args) => rekeyDriftedSlotId(args),
+          }, id);
+
+          if (reconciliation === "blocked") {
+            throw new Error("CREATE_SLOT_DRIFT_BLOCKED");
+          }
+
+          if (reconciliation === "repaired") {
+            autoRepairedCount += 1;
+          }
+
+          return storage.getClassSlotById(id);
+        },
         createClassSlot: (slot) => storage.createClassSlot(slot),
       }, data);
 
@@ -2503,6 +2605,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           success: true,
           count: createdSlots.length,
           skippedCount,
+          autoRepairedCount,
           message: skippedCount > 0
             ? `${createdSlots.length}個の枠を作成しました（${skippedCount}個は既存枠と重複したためスキップ）`
             : `${createdSlots.length}個の枠を作成しました`,
@@ -2521,6 +2624,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           success: true,
           count: createdSlots.length,
           skippedCount,
+          autoRepairedCount,
           message: skippedCount > 0
             ? `${createdSlots.length}個の枠を作成しました（${skippedCount}個は既存枠と重複したためスキップ）`
             : `${createdSlots.length}個の枠を作成しました`,
@@ -2528,6 +2632,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
     } catch (error: any) {
+      if (error.message === "CREATE_SLOT_DRIFT_BLOCKED") {
+        return res.status(409).json({
+          error: "過去データの枠ID不整合が残っているため、この枠はまだ作成できません。補修後に再度お試しください。",
+        });
+      }
       res.status(400).json({ error: error.message });
     }
   });

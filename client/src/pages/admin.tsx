@@ -164,12 +164,16 @@ export default function AdminPage() {
     onSuccess: async (response: any) => {
       const createdCount = response?.count ?? 0;
       const skippedCount = response?.skippedCount ?? 0;
+      const autoRepairedCount = response?.autoRepairedCount ?? 0;
       let description = createdCount > 0
         ? `${createdCount}個の枠を作成しました。`
         : "新しい枠を作成しました。";
 
       if (skippedCount > 0) {
         description += `（${skippedCount}件は既存枠と重複したためスキップしました）`;
+      }
+      if (autoRepairedCount > 0) {
+        description += `（過去データの不整合を${autoRepairedCount}件自動補修しました）`;
       }
 
       toast({

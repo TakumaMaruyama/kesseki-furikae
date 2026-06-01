@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import { createClassSlots, type CreateSlotInput, type SlotCreationDeps } from "../server/slotCreation";
+import {
+  reconcileDriftedSlotIdConflict,
+  resolveCanonicalSlotStartDateTime,
+  type SlotIdReconciliationDeps,
+} from "../server/slotIdReconciliation";
 import type { ClassSlot, InsertClassSlot } from "../shared/schema";
 import { buildCanonicalSlotId } from "../shared/slotId";
 
-function createMemoryDeps(initialSlots: ClassSlot[] = []): SlotCreationDeps {
+function createMemoryDeps(initialSlots: ClassSlot[] = []): SlotCreationDeps & SlotIdReconciliationDeps {
   const slots = new Map(initialSlots.map((slot) => [slot.id, slot]));
 
   return {
@@ -19,6 +24,15 @@ function createMemoryDeps(initialSlots: ClassSlot[] = []): SlotCreationDeps {
       };
       slots.set(slot.id, slot);
       return slot;
+    },
+    async rekeySlotId({ currentSlot, targetSlotId, targetSlotStartDateTime }) {
+      slots.delete(currentSlot.id);
+      slots.set(targetSlotId, {
+        ...currentSlot,
+        id: targetSlotId,
+        lessonStartDateTime: targetSlotStartDateTime,
+        updatedAt: new Date("2026-06-02T00:00:00.000Z"),
+      });
     },
   };
 }
@@ -89,6 +103,24 @@ async function main() {
     partialRecurring.createdSlots[0]?.id,
     buildCanonicalSlotId("2026-06-16", "10:00", "初級"),
   );
+
+  const driftedTargetId = buildCanonicalSlotId("2026-06-23", "10:00", "初級");
+  const driftedSlot = buildExistingSlot(driftedTargetId);
+  driftedSlot.date = new Date("2026-06-30T00:00:00.000Z");
+  driftedSlot.lessonStartDateTime = resolveCanonicalSlotStartDateTime(driftedSlot);
+
+  const driftedDeps = createMemoryDeps([driftedSlot]);
+  const repaired = await reconcileDriftedSlotIdConflict(driftedDeps, driftedTargetId);
+  assert.equal(repaired, "repaired");
+  assert.equal(await driftedDeps.getClassSlotById(driftedTargetId), undefined);
+  assert.ok(await driftedDeps.getClassSlotById(buildCanonicalSlotId("2026-06-30", "10:00", "初級")));
+
+  const createdAfterRepair = await createClassSlots(driftedDeps, buildInput({
+    date: "2026-06-23",
+  }));
+  assert.equal(createdAfterRepair.createdSlots.length, 1);
+  assert.equal(createdAfterRepair.skippedCount, 0);
+  assert.equal(createdAfterRepair.createdSlots[0]?.id, driftedTargetId);
 
   console.log("verify-create-slot: ok");
 }
