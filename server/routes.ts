@@ -40,6 +40,7 @@ import {
 } from "@shared/jst";
 import { getActualCurrent, getRemainingCapacity, hasRemainingCapacity } from "@shared/capacity";
 import { buildCanonicalSlotId } from "@shared/slotId";
+import { createClassSlots } from "./slotCreation";
 
 // Admin authentication middleware
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -2484,93 +2485,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/create-slot", requireAdmin, async (req, res) => {
     try {
       const data = createSlotRequestSchema.parse(req.body);
-      const createdSlots = [];
+      const { createdSlots, skippedCount } = await createClassSlots({
+        getClassSlotById: (id) => storage.getClassSlotById(id),
+        createClassSlot: (slot) => storage.createClassSlot(slot),
+      }, data);
 
       if (data.isRecurring && data.recurringWeeks) {
-        const startDate = parseJstDate(data.date);
-
-        for (let week = 0; week < data.recurringWeeks; week++) {
-          const currentDate = addDays(startDate, week * 7);
-
-          const dateStr = formatJstDate(currentDate);
-
-          for (const classBand of data.classBands) {
-            const dateTime = parseJstDateTime(dateStr, data.startTime);
-            const slotId = buildCanonicalSlotId(dateStr, data.startTime, classBand);
-
-            const existing = await storage.getClassSlotById(slotId);
-            if (existing) {
-              continue;
-            }
-
-            const bandCapacity = data.classBandCapacities[classBand] || {
-              capacityLimit: 10,
-              capacityCurrent: 0,
-            };
-
-            const slot = await storage.createClassSlot({
-              id: slotId,
-              date: currentDate,
-              startTime: data.startTime,
-              courseLabel: data.courseLabel,
-              classBand: classBand,
-              capacityLimit: bandCapacity.capacityLimit,
-              capacityCurrent: bandCapacity.capacityCurrent,
-              capacityMakeupUsed: 0,
-              waitlistCount: 0,
-              lessonStartDateTime: dateTime,
-              lastNotifiedRequestId: null,
-            });
-
-            createdSlots.push(slot);
-          }
+        if (createdSlots.length === 0) {
+          return res.status(409).json({
+            error: "指定した期間・開始時刻・クラス帯の枠はすべて既に存在します。",
+            count: 0,
+            skippedCount,
+          });
         }
 
         res.json({
           success: true,
           count: createdSlots.length,
-          message: `${createdSlots.length}個の枠を作成しました`,
+          skippedCount,
+          message: skippedCount > 0
+            ? `${createdSlots.length}個の枠を作成しました（${skippedCount}個は既存枠と重複したためスキップ）`
+            : `${createdSlots.length}個の枠を作成しました`,
           slots: createdSlots
         });
       } else {
-        const slotDate = parseJstDate(data.date);
-        const dateStr = formatJstDate(slotDate);
-        
-        for (const classBand of data.classBands) {
-          const dateTime = parseJstDateTime(dateStr, data.startTime);
-          const slotId = buildCanonicalSlotId(dateStr, data.startTime, classBand);
-
-          const existing = await storage.getClassSlotById(slotId);
-          if (existing) {
-            continue;
-          }
-
-          const bandCapacity = data.classBandCapacities[classBand] || {
-            capacityLimit: 10,
-            capacityCurrent: 0,
-          };
-
-          const slot = await storage.createClassSlot({
-            id: slotId,
-            date: slotDate,
-            startTime: data.startTime,
-            courseLabel: data.courseLabel,
-            classBand: classBand,
-            capacityLimit: bandCapacity.capacityLimit,
-            capacityCurrent: bandCapacity.capacityCurrent,
-            capacityMakeupUsed: 0,
-            waitlistCount: 0,
-            lessonStartDateTime: dateTime,
-            lastNotifiedRequestId: null,
+        if (createdSlots.length === 0) {
+          return res.status(409).json({
+            error: "指定した日付・開始時刻・クラス帯の枠は既に存在します。",
+            count: 0,
+            skippedCount,
           });
-
-          createdSlots.push(slot);
         }
 
         res.json({
           success: true,
           count: createdSlots.length,
-          message: `${createdSlots.length}個の枠を作成しました`,
+          skippedCount,
+          message: skippedCount > 0
+            ? `${createdSlots.length}個の枠を作成しました（${skippedCount}個は既存枠と重複したためスキップ）`
+            : `${createdSlots.length}個の枠を作成しました`,
           slots: createdSlots
         });
       }

@@ -161,16 +161,29 @@ export default function AdminPage() {
 
   const createSlotMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/admin/create-slot", data),
-    onSuccess: (response: any) => {
-      const description = response.count
-        ? `${response.count}個の枠を作成しました。`
+    onSuccess: async (response: any) => {
+      const createdCount = response?.count ?? 0;
+      const skippedCount = response?.skippedCount ?? 0;
+      let description = createdCount > 0
+        ? `${createdCount}個の枠を作成しました。`
         : "新しい枠を作成しました。";
+
+      if (skippedCount > 0) {
+        description += `（${skippedCount}件は既存枠と重複したためスキップしました）`;
+      }
 
       toast({
         title: "作成完了",
         description,
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/slots"] });
+
+      const firstCreatedDate = response?.slots?.[0]?.date;
+      if (firstCreatedDate) {
+        setSelectedDate(parseJstDate(formatJstDate(firstCreatedDate)));
+        setViewMode("calendar");
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/slots"] });
       setShowSlotDialog(false);
       setEditingSlotData(null);
     },
