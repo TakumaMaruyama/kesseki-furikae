@@ -144,6 +144,21 @@ export const insertClassSlotSchema = createInsertSchema(classSlots).omit({
 export type InsertClassSlot = z.infer<typeof insertClassSlotSchema>;
 export type ClassSlot = typeof classSlots.$inferSelect;
 
+export const slotIdAliases = pgTable("slot_id_aliases", {
+  legacySlotId: varchar("legacy_slot_id").primaryKey(),
+  canonicalSlotId: varchar("canonical_slot_id").notNull().references(() => classSlots.id, { onDelete: "cascade" }),
+  source: varchar("source").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("IDX_slot_id_aliases_canonical_slot_id").on(table.canonicalSlotId),
+]);
+
+export const insertSlotIdAliasSchema = createInsertSchema(slotIdAliases).omit({
+  createdAt: true,
+});
+export type InsertSlotIdAlias = z.infer<typeof insertSlotIdAliasSchema>;
+export type SlotIdAlias = typeof slotIdAliases.$inferSelect;
+
 // Closure events (temporary class cancellation handling)
 export const closureEvents = pgTable("closure_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -5,7 +5,7 @@ import { buildCanonicalSlotId } from "@shared/slotId";
 export const SLOT_ID_REKEY_TARGET_EXISTS = "SLOT_ID_REKEY_TARGET_EXISTS";
 
 export type SlotIdReconciliationDeps = {
-  getClassSlotById(id: string): Promise<ClassSlot | undefined>;
+  getClassSlotByExactId(id: string): Promise<ClassSlot | undefined>;
   rekeySlotId(args: {
     currentSlot: ClassSlot;
     targetSlotId: string;
@@ -29,7 +29,7 @@ export async function reconcileDriftedSlotIdConflict(
   deps: SlotIdReconciliationDeps,
   requestedSlotId: string,
 ): Promise<SlotIdReconciliationResult> {
-  const currentSlot = await deps.getClassSlotById(requestedSlotId);
+  const currentSlot = await deps.getClassSlotByExactId(requestedSlotId);
   if (!currentSlot) {
     return "unchanged";
   }
@@ -39,7 +39,7 @@ export async function reconcileDriftedSlotIdConflict(
     return "unchanged";
   }
 
-  const targetSlot = await deps.getClassSlotById(targetSlotId);
+  const targetSlot = await deps.getClassSlotByExactId(targetSlotId);
   if (targetSlot) {
     return "blocked";
   }

@@ -2,7 +2,8 @@ import cron from "node-cron";
 import { db } from "./db";
 import { classSlots } from "@shared/schema";
 import { and, gte, lte } from "drizzle-orm";
-import { addJstDays, endOfJstDay, formatJstDate, JST_TIME_ZONE, parseJstDateTime, startOfJstDay } from "@shared/jst";
+import { addJstDays, endOfJstDay, JST_TIME_ZONE, startOfJstDay } from "@shared/jst";
+import { getCanonicalSlotStartDateTime } from "@shared/slotDateTime";
 
 export function startScheduler() {
   // 定期的な欠席期限チェックのみ実行（順番待ち機能は削除済み）
@@ -37,7 +38,7 @@ export function startScheduler() {
       ));
 
     const upcomingSlots = candidateSlots.filter((slot) => {
-      const canonicalSlotStartDateTime = parseJstDateTime(formatJstDate(slot.date), slot.startTime);
+      const canonicalSlotStartDateTime = getCanonicalSlotStartDateTime(slot);
       return canonicalSlotStartDateTime >= now && canonicalSlotStartDateTime <= tomorrow;
     });
 

@@ -1,6 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { format, parseISO } from "date-fns";
+import { format } from "date-fns";
 import { ja } from "date-fns/locale";
+import { getRequestSlotDateTime } from "@shared/slotDateTime";
 import { parseSlotId as parseCanonicalSlotId } from "@shared/slotId";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,19 +32,12 @@ function parseSlotDateTimeFromId(slotId: string): Date | null {
     return null;
   }
 
-  const date = parseISO(`${parsed.dateISO}T${parsed.startTime}:00`);
-  return Number.isNaN(date.getTime()) ? null : date;
+  const date = getRequestSlotDateTime({ toSlotId: slotId });
+  return date;
 }
 
 function resolveRequestSlotDateTime(request: Pick<MakeupRequest, "toSlotId" | "toSlotStartDateTime">): Date | null {
-  if (request.toSlotStartDateTime) {
-    const slotDateTime = new Date(request.toSlotStartDateTime);
-    if (!Number.isNaN(slotDateTime.getTime())) {
-      return slotDateTime;
-    }
-  }
-
-  return parseSlotDateTimeFromId(request.toSlotId);
+  return getRequestSlotDateTime(request) ?? parseSlotDateTimeFromId(request.toSlotId);
 }
 
 function formatRequestSlotDateTime(

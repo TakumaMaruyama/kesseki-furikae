@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { format, parseISO } from "date-fns";
+import { format } from "date-fns";
 import { ja } from "date-fns/locale";
+import { getRequestSlotDateTime } from "@shared/slotDateTime";
 import { parseSlotId as parseCanonicalSlotId } from "@shared/slotId";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,16 +27,15 @@ import { Link } from "wouter";
 function formatSlotDateTimeFromId(slotId: string): string {
   const parsed = parseCanonicalSlotId(slotId);
   if (!parsed) return slotId;
-  const date = parseISO(parsed.dateISO);
+  const date = getRequestSlotDateTime({ toSlotId: slotId });
+  if (!date) return slotId;
   return `${format(date, "yyyy年M月d日(E)", { locale: ja })} ${parsed.startTime}`;
 }
 
 function formatRequestSlotDateTime(request: { toSlotId: string; toSlotStartDateTime?: string | null }): string {
-  if (request.toSlotStartDateTime) {
-    const slotTime = new Date(request.toSlotStartDateTime);
-    if (!Number.isNaN(slotTime.getTime())) {
-      return format(slotTime, "yyyy年M月d日(E) HH:mm", { locale: ja });
-    }
+  const slotTime = getRequestSlotDateTime(request);
+  if (slotTime) {
+    return format(slotTime, "yyyy年M月d日(E) HH:mm", { locale: ja });
   }
 
   return formatSlotDateTimeFromId(request.toSlotId);

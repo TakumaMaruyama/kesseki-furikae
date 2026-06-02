@@ -27,9 +27,11 @@ import {
   type InsertHoliday,
   type GlobalSettings,
 } from "@shared/schema";
-import { addJstDays, endOfJstDay, formatJstDate, parseJstDateTime, startOfJstDay } from "@shared/jst";
+import { addJstDays, endOfJstDay, startOfJstDay } from "@shared/jst";
+import { isSlotStarted } from "@shared/slotDateTime";
 import { db } from "./db";
-import { eq, and, gte, lte, lt, asc, desc, sql } from "drizzle-orm";
+import { eq, and, gte, lte, lt, asc, desc, inArray, sql } from "drizzle-orm";
+import { resolveSlotLookupIds, resolveSlotReference } from "./slotIdAliases";
 
 export type TrialParticipantWithSlot = {
   id: string;
@@ -282,8 +284,8 @@ export class DatabaseStorage implements IStorage {
 
   // ClassSlot operations
   async getClassSlotById(id: string): Promise<ClassSlot | undefined> {
-    const [slot] = await db.select().from(classSlots).where(eq(classSlots.id, id));
-    return slot;
+    const resolved = await resolveSlotReference(db, id);
+    return resolved?.slot;
   }
 
   async getClassSlotsByDateRange(startDate: Date, endDate: Date): Promise<ClassSlot[]> {
@@ -349,10 +351,7 @@ export class DatabaseStorage implements IStorage {
         eq(classSlots.isClosed, false),
       ));
 
-    return slots.filter(slot => {
-      const canonicalSlotStartDateTime = parseJstDateTime(formatJstDate(slot.date), slot.startTime);
-      return canonicalSlotStartDateTime >= now;
-    }).length;
+    return slots.filter((slot) => !isSlotStarted(slot, now)).length;
   }
 
   async incrementClassSlotMakeup(id: string): Promise<ClassSlot | undefined> {
@@ -421,9 +420,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAbsencesByOriginalSlotId(slotId: string): Promise<Absence[]> {
+    const slotIds = await resolveSlotLookupIds(db, slotId);
     return db.select().from(absences).where(
       and(
-        eq(absences.originalSlotId, slotId),
+        inArray(absences.originalSlotId, slotIds),
         sql`${absences.makeupStatus} NOT IN ('CANCELLED', 'EXPIRED')`
       )
     );
@@ -460,7 +460,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getRequestsBySlotId(slotId: string): Promise<Request[]> {
-    return db.select().from(requests).where(eq(requests.toSlotId, slotId));
+    const slotIds = await resolveSlotLookupIds(db, slotId);
+    return db.select().from(requests).where(inArray(requests.toSlotId, slotIds));
   }
 
   async getRequestsByAbsenceId(absenceId: string): Promise<Request[]> {
@@ -468,8 +469,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getConfirmedRequestsBySlotId(slotId: string): Promise<Request[]> {
+    const slotIds = await resolveSlotLookupIds(db, slotId);
     return db.select().from(requests)
-      .where(and(eq(requests.toSlotId, slotId), eq(requests.status, "確定")));
+      .where(and(inArray(requests.toSlotId, slotIds), eq(requests.status, "確定")));
   }
 
   async getConfirmedRequests(): Promise<Request[]> {
