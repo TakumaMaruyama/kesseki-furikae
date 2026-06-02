@@ -57,6 +57,10 @@ import {
   resolveSlotReference,
   upsertSlotIdAlias,
 } from "./slotIdAliases";
+import {
+  generateUniqueAbsenceConfirmCode,
+  isAbsenceConfirmCodeUniqueViolation,
+} from "./confirmCode";
 
 // Admin authentication middleware
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -67,11 +71,6 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
   } else {
     res.status(401).json({ error: "認証が必要です" });
   }
-}
-
-// Generate a 6-digit confirmation code
-function generateConfirmCode(): string {
-  return Math.random().toString().slice(2, 8).padStart(6, '0');
 }
 
 async function getClassSlotByExactId(executor: any, slotId: string) {
@@ -405,26 +404,43 @@ async function createAbsenceRecordInTransaction(
   const makeupDeadline = resolveMakeupDeadline(rawMakeupDeadline, options.makeupDeadlineCap);
   const resumeToken = createId();
   const absenceId = createId();
-  const confirmCode = generateConfirmCode();
+  let confirmCode: string | null = null;
 
-  await tx.insert(absences).values({
-    id: absenceId,
-    userId: null,
-    childId: entry.childId || null,
-    childName: entry.childName,
-    declaredClassBand: entry.declaredClassBand,
-    reportType: options.reportType,
-    absentDate,
-    originalSlotId: originalSlotRef.canonicalSlotId,
-    contactEmail: options.contactEmail,
-    reason: options.reason,
-    sourceType: options.sourceType,
-    closureEventId: options.closureEventId,
-    resumeToken,
-    confirmCode,
-    makeupDeadline,
-    makeupStatus: "PENDING",
-  });
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const candidate = await generateUniqueAbsenceConfirmCode(tx);
+
+    try {
+      await tx.insert(absences).values({
+        id: absenceId,
+        userId: null,
+        childId: entry.childId || null,
+        childName: entry.childName,
+        declaredClassBand: entry.declaredClassBand,
+        reportType: options.reportType,
+        absentDate,
+        originalSlotId: originalSlotRef.canonicalSlotId,
+        contactEmail: options.contactEmail,
+        reason: options.reason,
+        sourceType: options.sourceType,
+        closureEventId: options.closureEventId,
+        resumeToken,
+        confirmCode: candidate,
+        makeupDeadline,
+        makeupStatus: "PENDING",
+      });
+      confirmCode = candidate;
+      break;
+    } catch (error: any) {
+      if (isAbsenceConfirmCodeUniqueViolation(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (!confirmCode) {
+    throw new Error("CONFIRM_CODE_EXHAUSTED");
+  }
 
   if (options.decrementOriginalSlotCurrent && options.sourceType === "NORMAL" && options.reportType === "ABSENCE") {
     await tx
@@ -749,7 +765,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const userAbsences = await storage.getAbsencesByConfirmCode(confirmCode);
-      const userRequests = await storage.getRequestsByConfirmCode(confirmCode);
+      const userRequests = userAbsences.length === 0
+        ? []
+        : (await Promise.all(
+            userAbsences.map((absence) => storage.getRequestsByAbsenceId(absence.id)),
+          )).flat().sort((a, b) => {
+            const aTime = new Date(a.createdAt || 0).getTime();
+            const bTime = new Date(b.createdAt || 0).getTime();
+            return bTime - aTime;
+          });
 
       res.json({
         absences: userAbsences,
@@ -1794,6 +1818,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           rowIndex: error.rowIndex,
         });
       }
+      if (error.message === "CONFIRM_CODE_EXHAUSTED") {
+        return res.status(503).json({
+          error: "確認コードの発行に失敗しました。時間をおいて再度お試しください。",
+        });
+      }
       res.status(400).json({ error: error.message });
     }
   });
@@ -1827,6 +1856,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           rowIndex: error.rowIndex,
         });
       }
+      if (error.message === "CONFIRM_CODE_EXHAUSTED") {
+        return res.status(503).json({
+          error: "確認コードの発行に失敗しました。時間をおいて再度お試しください。",
+        });
+      }
       res.status(400).json({ error: error.message });
     }
   });
@@ -1851,6 +1885,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         reportType: created.reportType,
       });
     } catch (error: any) {
+      if (error.message === "CONFIRM_CODE_EXHAUSTED") {
+        return res.status(503).json({
+          error: "確認コードの発行に失敗しました。時間をおいて再度お試しください。",
+        });
+      }
       res.status(400).json({ error: error.message });
     }
   });

@@ -10,6 +10,8 @@
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "ops:verify-slot-scripts": "tsx scripts/verify-slot-ops.ts",
+    "confirm-codes:audit": "tsx scripts/audit-confirm-code-collisions.ts",
+    "confirm-codes:verify": "tsx scripts/verify-confirm-code.ts",
     "slots:verify-create": "tsx scripts/verify-create-slot.ts",
     "slots:audit-id": "tsx scripts/audit-slot-id-drift.ts",
     "slots:backfill-aliases": "tsx scripts/backfill-slot-id-aliases.ts",
