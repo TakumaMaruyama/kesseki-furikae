@@ -19,7 +19,7 @@ export type CreateSlotInput = {
 };
 
 export type SlotCreationDeps = {
-  getClassSlotById(id: string): Promise<ClassSlot | undefined>;
+  getClassSlotByExactId(id: string): Promise<ClassSlot | undefined>;
   createClassSlot(data: InsertClassSlot): Promise<ClassSlot>;
 };
 
@@ -43,7 +43,7 @@ export async function createClassSlots(
     const dateTime = parseJstDateTime(dateStr, data.startTime);
     const slotId = buildCanonicalSlotId(dateStr, data.startTime, classBand);
 
-    const existing = await deps.getClassSlotById(slotId);
+    const existing = await deps.getClassSlotByExactId(slotId);
     if (existing) {
       skippedCount++;
       return;

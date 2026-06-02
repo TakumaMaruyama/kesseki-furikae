@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 const REQUIRED_SCRIPTS = [
   "slots:audit-id",
+  "slots:backfill-aliases",
   "slots:repair-id",
   "slots:audit-time",
   "slots:repair-time",

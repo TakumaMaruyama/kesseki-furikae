@@ -1,5 +1,6 @@
 import { asc, eq } from "drizzle-orm";
 import { db } from "../server/db.ts";
+import { upsertSlotIdAlias } from "../server/slotIdAliases.ts";
 import { absences, classSlots, closureEventSlots, requests } from "../shared/schema.ts";
 import { formatJstDate, parseJstDateTime } from "../shared/jst.ts";
 import { buildCanonicalSlotId } from "../shared/slotId.ts";
@@ -200,6 +201,12 @@ async function main() {
             slotId: target.canonicalSlotId,
           })
           .where(eq(closureEventSlots.slotId, target.oldSlotId));
+
+        await upsertSlotIdAlias(tx, {
+          legacySlotId: target.oldSlotId,
+          canonicalSlotId: target.canonicalSlotId,
+          source: "repair_slot_id_drift",
+        });
 
         await tx.delete(classSlots).where(eq(classSlots.id, target.oldSlotId));
       });

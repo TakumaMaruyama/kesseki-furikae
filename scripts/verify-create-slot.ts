@@ -12,7 +12,7 @@ function createMemoryDeps(initialSlots: ClassSlot[] = []): SlotCreationDeps & Sl
   const slots = new Map(initialSlots.map((slot) => [slot.id, slot]));
 
   return {
-    async getClassSlotById(id: string) {
+    async getClassSlotByExactId(id: string) {
       return slots.get(id);
     },
     async createClassSlot(data: InsertClassSlot) {
@@ -112,8 +112,8 @@ async function main() {
   const driftedDeps = createMemoryDeps([driftedSlot]);
   const repaired = await reconcileDriftedSlotIdConflict(driftedDeps, driftedTargetId);
   assert.equal(repaired, "repaired");
-  assert.equal(await driftedDeps.getClassSlotById(driftedTargetId), undefined);
-  assert.ok(await driftedDeps.getClassSlotById(buildCanonicalSlotId("2026-06-30", "10:00", "初級")));
+  assert.equal(await driftedDeps.getClassSlotByExactId(driftedTargetId), undefined);
+  assert.ok(await driftedDeps.getClassSlotByExactId(buildCanonicalSlotId("2026-06-30", "10:00", "初級")));
 
   const createdAfterRepair = await createClassSlots(driftedDeps, buildInput({
     date: "2026-06-23",

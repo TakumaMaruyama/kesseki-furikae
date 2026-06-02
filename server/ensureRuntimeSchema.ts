@@ -41,6 +41,13 @@ const COMPAT_MIGRATION_STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS IDX_trial_participants_slot_id ON trial_participants (slot_id)`,
   `CREATE INDEX IF NOT EXISTS IDX_trial_participants_created_at ON trial_participants (created_at)`,
+  `CREATE TABLE IF NOT EXISTS slot_id_aliases (
+    legacy_slot_id varchar PRIMARY KEY,
+    canonical_slot_id varchar NOT NULL REFERENCES class_slots(id) ON DELETE cascade,
+    source varchar NOT NULL,
+    created_at timestamp DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS IDX_slot_id_aliases_canonical_slot_id ON slot_id_aliases (canonical_slot_id)`,
   `DO $$
   BEGIN
     IF NOT EXISTS (

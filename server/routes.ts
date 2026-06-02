@@ -40,11 +40,23 @@ import {
 } from "@shared/jst";
 import { getActualCurrent, getRemainingCapacity, hasRemainingCapacity } from "@shared/capacity";
 import { buildCanonicalSlotId } from "@shared/slotId";
+import {
+  getCanonicalSlotStartDateTime,
+  getSlotDateISO,
+  isDeadlineExpired,
+  isSlotStarted,
+} from "@shared/slotDateTime";
 import { createClassSlots } from "./slotCreation";
 import {
   reconcileDriftedSlotIdConflict,
   SLOT_ID_REKEY_TARGET_EXISTS,
 } from "./slotIdReconciliation";
+import {
+  resolveAbsenceSlotReference,
+  resolveRequestSlotReference,
+  resolveSlotReference,
+  upsertSlotIdAlias,
+} from "./slotIdAliases";
 
 // Admin authentication middleware
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -62,8 +74,13 @@ function generateConfirmCode(): string {
   return Math.random().toString().slice(2, 8).padStart(6, '0');
 }
 
-function getCanonicalSlotStartDateTime(slot: { date: Date | string | number; startTime: string }): Date {
-  return parseJstDateTime(formatJstDate(slot.date), slot.startTime);
+async function getClassSlotByExactId(executor: any, slotId: string) {
+  const [slot] = await executor
+    .select()
+    .from(classSlots)
+    .where(eq(classSlots.id, slotId))
+    .limit(1);
+  return slot;
 }
 
 async function rekeyDriftedSlotId(args: {
@@ -72,11 +89,7 @@ async function rekeyDriftedSlotId(args: {
   targetSlotStartDateTime: Date;
 }) {
   await db.transaction(async (tx) => {
-    const [currentSlot] = await tx
-      .select()
-      .from(classSlots)
-      .where(eq(classSlots.id, args.currentSlot.id))
-      .limit(1);
+    const currentSlot = await getClassSlotByExactId(tx, args.currentSlot.id);
 
     if (!currentSlot) {
       return;
@@ -86,13 +99,8 @@ async function rekeyDriftedSlotId(args: {
       return;
     }
 
-    const conflictingTarget = await tx
-      .select({ id: classSlots.id })
-      .from(classSlots)
-      .where(eq(classSlots.id, args.targetSlotId))
-      .limit(1);
-
-    if (conflictingTarget.length > 0) {
+    const conflictingTarget = await getClassSlotByExactId(tx, args.targetSlotId);
+    if (conflictingTarget) {
       throw new Error(SLOT_ID_REKEY_TARGET_EXISTS);
     }
 
@@ -143,6 +151,12 @@ async function rekeyDriftedSlotId(args: {
         updatedAt: new Date(),
       })
       .where(eq(trialParticipants.slotId, currentSlot.id));
+
+    await upsertSlotIdAlias(tx, {
+      legacySlotId: currentSlot.id,
+      canonicalSlotId: args.targetSlotId,
+      source: "rekey_drifted_slot_id",
+    });
 
     await tx.delete(classSlots).where(eq(classSlots.id, currentSlot.id));
   });
@@ -359,8 +373,9 @@ async function createAbsenceRecordInTransaction(
   options: CreateAbsenceInternalOptions,
 ): Promise<CreatedAbsenceInternal> {
   const absentDate = parseJstDate(entry.absentDateISO);
-  const [originalSlot] = await tx.select().from(classSlots).where(eq(classSlots.id, entry.originalSlotId));
-  if (!originalSlot) {
+  const originalSlotRef = await resolveSlotReference(tx, entry.originalSlotId);
+  const originalSlot = originalSlotRef?.slot;
+  if (!originalSlotRef || !originalSlot) {
     throw new Error("指定されたレッスン枠が見つかりません。");
   }
 
@@ -368,7 +383,7 @@ async function createAbsenceRecordInTransaction(
     throw new Error("休講対象枠のため通常欠席登録できません。休講用の共通コード導線をご利用ください。");
   }
 
-  const slotDateStr = formatJstDate(originalSlot.date);
+  const slotDateStr = getSlotDateISO(originalSlot);
   if (slotDateStr !== entry.absentDateISO) {
     throw new Error("選択したレッスン枠の日付が欠席日と一致しません。");
   }
@@ -379,8 +394,7 @@ async function createAbsenceRecordInTransaction(
 
   if (options.enforceBeforeStart) {
     const now = new Date();
-    const originalSlotStartDateTime = getCanonicalSlotStartDateTime(originalSlot);
-    if (originalSlotStartDateTime <= now) {
+    if (isSlotStarted(originalSlot, now)) {
       throw new Error("レッスン開始時刻までに欠席連絡がないため、振替登録はできません。");
     }
   }
@@ -401,7 +415,7 @@ async function createAbsenceRecordInTransaction(
     declaredClassBand: entry.declaredClassBand,
     reportType: options.reportType,
     absentDate,
-    originalSlotId: entry.originalSlotId,
+    originalSlotId: originalSlotRef.canonicalSlotId,
     contactEmail: options.contactEmail,
     reason: options.reason,
     sourceType: options.sourceType,
@@ -419,7 +433,7 @@ async function createAbsenceRecordInTransaction(
         capacityCurrent: sql`GREATEST(0, ${classSlots.capacityCurrent} - 1)`,
         updatedAt: new Date(),
       })
-      .where(eq(classSlots.id, entry.originalSlotId));
+      .where(eq(classSlots.id, originalSlotRef.canonicalSlotId));
   }
 
   return {
@@ -468,6 +482,9 @@ async function cancelAbsenceWithRelated(absenceId: string, options: CancelAbsenc
       throw new Error("NOT_FOUND_ABSENCE");
     }
     const shouldRestoreOriginalSlotCurrent = absence.sourceType === "NORMAL" && absence.reportType === "ABSENCE";
+    const originalSlotRef = shouldRestoreOriginalSlotCurrent
+      ? await resolveAbsenceSlotReference(tx, absence)
+      : undefined;
 
     if (isAbsenceCancelledStatus(absence.makeupStatus)) {
       if (absence.makeupStatus !== "CANCELLED") {
@@ -484,7 +501,7 @@ async function cancelAbsenceWithRelated(absenceId: string, options: CancelAbsenc
     }
 
     if (shouldRestoreOriginalSlotCurrent && options.enforceGraceRule && !isWithinAbsenceGracePeriod(absence.createdAt)) {
-      const [originalSlot] = await tx.select().from(classSlots).where(eq(classSlots.id, absence.originalSlotId));
+      const originalSlot = originalSlotRef?.slot;
       if (!originalSlot) {
         throw new Error("ORIGINAL_SLOT_NOT_FOUND");
       }
@@ -515,13 +532,16 @@ async function cancelAbsenceWithRelated(absenceId: string, options: CancelAbsenc
     const relatedRequests = await tx.select().from(requests).where(eq(requests.absenceId, absence.id));
     for (const request of relatedRequests) {
       if (request.status === "確定") {
-        await tx
-          .update(classSlots)
-          .set({
-            capacityMakeupUsed: sql`GREATEST(0, ${classSlots.capacityMakeupUsed} - 1)`,
-            updatedAt: new Date(),
-          })
-          .where(eq(classSlots.id, request.toSlotId));
+        const requestSlotRef = await resolveRequestSlotReference(tx, request);
+        if (requestSlotRef) {
+          await tx
+            .update(classSlots)
+            .set({
+              capacityMakeupUsed: sql`GREATEST(0, ${classSlots.capacityMakeupUsed} - 1)`,
+              updatedAt: new Date(),
+            })
+            .where(eq(classSlots.id, requestSlotRef.canonicalSlotId));
+        }
 
         await tx
           .update(requests)
@@ -543,13 +563,15 @@ async function cancelAbsenceWithRelated(absenceId: string, options: CancelAbsenc
     }
 
     if (shouldRestoreOriginalSlotCurrent) {
-      await tx
-        .update(classSlots)
-        .set({
-          capacityCurrent: sql`${classSlots.capacityCurrent} + 1`,
-          updatedAt: new Date(),
-        })
-        .where(eq(classSlots.id, absence.originalSlotId));
+      if (originalSlotRef) {
+        await tx
+          .update(classSlots)
+          .set({
+            capacityCurrent: sql`${classSlots.capacityCurrent} + 1`,
+            updatedAt: new Date(),
+          })
+          .where(eq(classSlots.id, originalSlotRef.canonicalSlotId));
+      }
     }
 
     return {
@@ -573,7 +595,8 @@ async function cancelRequestUnified(requestId: string): Promise<CancelRequestRes
       throw new Error("NOT_FOUND_REQUEST");
     }
 
-    const [slot] = await tx.select().from(classSlots).where(eq(classSlots.id, request.toSlotId));
+    const slotRef = await resolveRequestSlotReference(tx, request);
+    const slot = slotRef?.slot;
 
     if (isRequestCancelledStatus(request.status)) {
       if (request.status !== "却下") {
@@ -594,14 +617,14 @@ async function cancelRequestUnified(requestId: string): Promise<CancelRequestRes
     }
 
     const wasConfirmed = request.status === "確定";
-    if (wasConfirmed) {
+    if (wasConfirmed && slotRef) {
       await tx
         .update(classSlots)
         .set({
           capacityMakeupUsed: sql`GREATEST(0, ${classSlots.capacityMakeupUsed} - 1)`,
           updatedAt: new Date(),
         })
-        .where(eq(classSlots.id, request.toSlotId));
+        .where(eq(classSlots.id, slotRef.canonicalSlotId));
     }
 
     await tx
@@ -821,9 +844,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "この欠席は既にキャンセルされています" });
       }
 
-      const slot = absence.originalSlotId
-        ? await storage.getClassSlotById(absence.originalSlotId)
+      const slotRef = absence.originalSlotId
+        ? await resolveAbsenceSlotReference(db, absence)
         : null;
+      const slot = slotRef?.slot ?? null;
 
       res.json({
         childName: absence.childName,
@@ -1006,7 +1030,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Enrich with slot info
       const enrichedAbsences = await Promise.all(
         allAbsences.map(async (absence) => {
-          const slot = await storage.getClassSlotById(absence.originalSlotId);
+          const slot = (await resolveAbsenceSlotReference(db, absence))?.slot;
           return {
             ...absence,
             courseLabel: slot?.courseLabel || null,
@@ -1029,7 +1053,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Enrich with slot info
       const enrichedRequests = await Promise.all(
         allRequests.map(async (request) => {
-          const slot = await storage.getClassSlotById(request.toSlotId);
+          const slot = (await resolveRequestSlotReference(db, request))?.slot;
           return {
             ...request,
             courseLabel: slot?.courseLabel || null,
@@ -1516,7 +1540,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             courseLabel: slot.courseLabel,
             classBand: slot.classBand,
             lessonStartDateTime: canonicalSlotStartDateTime.toISOString(),
-            isPastLesson: canonicalSlotStartDateTime <= now,
+            isPastLesson: isSlotStarted(slot, now),
           };
         })
       });
@@ -1626,7 +1650,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "共通コードが無効です。" });
       }
 
-      if (endOfJstDay(event.expiresAt) < now) {
+      if (isDeadlineExpired(event.expiresAt, now)) {
         return res.status(400).json({ error: "この共通コードは有効期限切れです。" });
       }
 
@@ -1687,7 +1711,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           throw new Error("共通コードが無効です。");
         }
 
-        if (endOfJstDay(event.expiresAt) < now) {
+        if (isDeadlineExpired(event.expiresAt, now)) {
           throw new Error("この共通コードは有効期限切れです。");
         }
 
@@ -1921,10 +1945,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allSlots = await storage.getClassSlotsByDateRange(startRange, endRange);
       const now = new Date();
 
-      const slots = allSlots.filter(slot => {
-        const canonicalSlotStartDateTime = getCanonicalSlotStartDateTime(slot);
-        return slot.classBand === data.declaredClassBand && !slot.isClosed && canonicalSlotStartDateTime >= now;
-      });
+      const slots = allSlots.filter((slot) =>
+        slot.classBand === data.declaredClassBand && !slot.isClosed && !isSlotStarted(slot, now)
+      );
 
       const results = slots.map(slot => {
         const remainingSlots = getRemainingCapacity(slot);
@@ -1973,8 +1996,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const cancelToken = createId();
       const requestId = createId();
       const bookingResult = await db.transaction(async (tx) => {
-        const [slot] = await tx.select().from(classSlots).where(eq(classSlots.id, data.toSlotId));
-        if (!slot) {
+        const slotRef = await resolveSlotReference(tx, data.toSlotId);
+        const slot = slotRef?.slot;
+        if (!slotRef || !slot) {
           throw new Error("BOOK_SLOT_NOT_FOUND");
         }
 
@@ -1987,7 +2011,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         const slotStartDateTime = getCanonicalSlotStartDateTime(slot);
-        if (slotStartDateTime <= now) {
+        if (isSlotStarted(slot, now)) {
           throw new Error("BOOK_SLOT_STARTED");
         }
 
@@ -2021,7 +2045,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (absence.makeupStatus !== "PENDING") {
             throw new Error("BOOK_ABSENCE_NOT_PENDING");
           }
-          if (endOfJstDay(absence.makeupDeadline) < now) {
+          if (isDeadlineExpired(absence.makeupDeadline, now)) {
             throw new Error("BOOK_ABSENCE_DEADLINE");
           }
 
@@ -2060,7 +2084,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             updatedAt: new Date(),
           })
           .where(and(
-            eq(classSlots.id, data.toSlotId),
+            eq(classSlots.id, slotRef.canonicalSlotId),
             sql`${classSlots.capacityLimit} - ${classSlots.capacityCurrent} - ${classSlots.capacityMakeupUsed} >= 1`,
           ))
           .returning();
@@ -2076,7 +2100,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           childName: data.childName,
           declaredClassBand: data.declaredClassBand,
           absentDate: parseJstDate(data.absentDateISO),
-          toSlotId: data.toSlotId,
+          toSlotId: slotRef.canonicalSlotId,
           status: "確定",
           contactEmail: txContactEmail,
           confirmToken: null,
@@ -2573,9 +2597,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const data = createSlotRequestSchema.parse(req.body);
       let autoRepairedCount = 0;
       const { createdSlots, skippedCount } = await createClassSlots({
-        getClassSlotById: async (id) => {
+        getClassSlotByExactId: async (id) => {
           const reconciliation = await reconcileDriftedSlotIdConflict({
-            getClassSlotById: (slotId) => storage.getClassSlotById(slotId),
+            getClassSlotByExactId: (slotId) => getClassSlotByExactId(db, slotId),
             rekeySlotId: (args) => rekeyDriftedSlotId(args),
           }, id);
 
@@ -2587,7 +2611,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             autoRepairedCount += 1;
           }
 
-          return storage.getClassSlotById(id);
+          return getClassSlotByExactId(db, id);
         },
         createClassSlot: (slot) => storage.createClassSlot(slot),
       }, data);
@@ -2650,7 +2674,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "指定された枠が見つかりません。" });
       }
 
-      const existingDateISO = formatJstDate(existing.date);
+      const existingDateISO = getSlotDateISO(existing);
       const existingClassBand = existing.classBand as "初級" | "中級" | "上級";
       const existingCanonicalSlotId = buildCanonicalSlotId(existingDateISO, existing.startTime, existingClassBand);
       const targetDateISO = data.date || existingDateISO;
@@ -2672,7 +2696,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (data.date) {
         updateData.lessonStartDateTime = parseJstDateTime(data.date, existing.startTime);
       } else if (data.startTime) {
-        const dateStr = formatJstDate(existing.date);
+        const dateStr = getSlotDateISO(existing);
         updateData.lessonStartDateTime = parseJstDateTime(dateStr, data.startTime);
       }
 
@@ -2714,7 +2738,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       } else {
         if (!keyFieldsChanged) {
-          const updated = await storage.updateClassSlot(data.id, updateData);
+          const updated = await storage.updateClassSlot(existing.id, updateData);
           return res.json({ success: true, slot: updated });
         }
 
@@ -2741,7 +2765,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
               capacityCurrent: updateData.capacityCurrent ?? existing.capacityCurrent,
               capacityMakeupUsed: existing.capacityMakeupUsed || 0,
               waitlistCount: existing.waitlistCount || 0,
-              lessonStartDateTime: updateData.lessonStartDateTime || existing.lessonStartDateTime,
+              lessonStartDateTime: getCanonicalSlotStartDateTime({
+                date: updateData.date || existing.date,
+                startTime: updateData.startTime || existing.startTime,
+              }),
               lastNotifiedRequestId: existing.lastNotifiedRequestId || null,
               createdAt: existing.createdAt,
               updatedAt: new Date(),
@@ -2780,6 +2807,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
               updatedAt: new Date(),
             })
             .where(eq(trialParticipants.slotId, existing.id));
+
+          await upsertSlotIdAlias(tx, {
+            legacySlotId: existing.id,
+            canonicalSlotId: targetSlotId,
+            source: "admin_update_slot",
+          });
 
           await tx.delete(classSlots).where(eq(classSlots.id, existing.id));
 
@@ -2821,7 +2854,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await storage.deleteRequest(request.id);
         }
 
-        await storage.deleteClassSlot(data.id);
+        await storage.deleteClassSlot(existing.id);
 
         return res.json({
           success: true,
@@ -2907,7 +2940,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await storage.deleteRequest(request.id);
         }
 
-        await storage.deleteClassSlot(slotId);
+        await storage.deleteClassSlot(existing.id);
         deletedCount++;
       }
 
@@ -3035,7 +3068,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "この予約は既に処理されています" });
       }
 
-      const slot = await storage.getClassSlotById(request.toSlotId);
+      const slot = (await resolveRequestSlotReference(db, request))?.slot;
       if (!slot) {
         return res.status(404).json({ error: "振替枠が見つかりません" });
       }
@@ -3087,7 +3120,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "この予約は既に処理されています" });
       }
 
-      const slot = await storage.getClassSlotById(request.toSlotId);
+      const slot = (await resolveRequestSlotReference(db, request))?.slot;
       if (!slot) {
         return res.status(404).json({ error: "振替枠が見つかりません" });
       }
