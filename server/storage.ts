@@ -6,6 +6,7 @@ import {
   absences,
   requests,
   trialParticipants,
+  newEnrollees,
   holidays,
   globalSettings,
   adminCredentials,
@@ -23,11 +24,14 @@ import {
   type InsertRequest,
   type TrialParticipant,
   type InsertTrialParticipant,
+  type NewEnrollee,
+  type InsertNewEnrollee,
   type Holiday,
   type InsertHoliday,
   type GlobalSettings,
 } from "@shared/schema";
 import { addJstDays, endOfJstDay, startOfJstDay } from "@shared/jst";
+import { getDayOfWeekLabelForDate, isNewEnrolleeVisibleOnDate } from "@shared/newEnrolleeVisibility";
 import { isSlotStarted } from "@shared/slotDateTime";
 import { db } from "./db";
 import { eq, and, gte, lte, lt, asc, desc, inArray, sql } from "drizzle-orm";
@@ -45,6 +49,19 @@ export type TrialParticipantWithSlot = {
   courseLabel: string;
   classBand: string;
   slotDate: Date;
+};
+
+export type TrialParticipantSearchResult = {
+  id: string;
+  participantName: string;
+  grade: string;
+  swimLevel: string;
+  slotId: string;
+  slotDate: Date;
+  startTime: string;
+  courseLabel: string;
+  classBand: string;
+  createdAt: Date | null;
 };
 
 export interface IStorage {
@@ -118,6 +135,14 @@ export interface IStorage {
   createTrialParticipant(data: InsertTrialParticipant): Promise<TrialParticipant>;
   updateTrialParticipant(id: string, data: Partial<InsertTrialParticipant>): Promise<TrialParticipant | undefined>;
   deleteTrialParticipant(id: string): Promise<boolean>;
+  searchTrialParticipants(query: string, limit?: number): Promise<TrialParticipantSearchResult[]>;
+
+  // New enrollee operations
+  getNewEnrolleesVisibleOnDate(date: Date): Promise<NewEnrollee[]>;
+  getNewEnrolleeById(id: string): Promise<NewEnrollee | undefined>;
+  createNewEnrollee(data: InsertNewEnrollee): Promise<NewEnrollee>;
+  updateNewEnrollee(id: string, data: Partial<InsertNewEnrollee>): Promise<NewEnrollee | undefined>;
+  deleteNewEnrollee(id: string): Promise<boolean>;
 
   // Holiday operations
   getAllHolidays(): Promise<Holiday[]>;
@@ -564,6 +589,84 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTrialParticipant(id: string): Promise<boolean> {
     const result = await db.delete(trialParticipants).where(eq(trialParticipants.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async searchTrialParticipants(query: string, limit = 20): Promise<TrialParticipantSearchResult[]> {
+    const normalizedQuery = query.trim();
+    const filters = normalizedQuery
+      ? [sql`${trialParticipants.participantName} ILIKE ${`%${normalizedQuery}%`}`]
+      : [];
+
+    return db
+      .select({
+        id: trialParticipants.id,
+        participantName: trialParticipants.participantName,
+        grade: trialParticipants.grade,
+        swimLevel: trialParticipants.swimLevel,
+        slotId: trialParticipants.slotId,
+        slotDate: classSlots.date,
+        startTime: classSlots.startTime,
+        courseLabel: classSlots.courseLabel,
+        classBand: classSlots.classBand,
+        createdAt: trialParticipants.createdAt,
+      })
+      .from(trialParticipants)
+      .innerJoin(classSlots, eq(trialParticipants.slotId, classSlots.id))
+      .where(filters.length > 0 ? and(...filters) : undefined)
+      .orderBy(desc(classSlots.date), desc(classSlots.startTime), asc(trialParticipants.participantName))
+      .limit(limit);
+  }
+
+  async getNewEnrolleesVisibleOnDate(date: Date): Promise<NewEnrollee[]> {
+    const targetDayOfWeek = getDayOfWeekLabelForDate(date);
+    const dayEnd = endOfJstDay(date);
+    const joinedAtLowerBound = addJstDays(date, -27);
+
+    const candidates = await db
+      .select()
+      .from(newEnrollees)
+      .where(and(
+        eq(newEnrollees.targetDayOfWeek, targetDayOfWeek),
+        gte(newEnrollees.joinedAt, joinedAtLowerBound),
+        lte(newEnrollees.joinedAt, dayEnd),
+      ))
+      .orderBy(asc(newEnrollees.targetStartTime), asc(newEnrollees.childName), asc(newEnrollees.createdAt));
+
+    return candidates.filter((enrollee) => isNewEnrolleeVisibleOnDate({
+      joinedAt: enrollee.joinedAt,
+      targetDayOfWeek: enrollee.targetDayOfWeek,
+      date,
+    }));
+  }
+
+  async getNewEnrolleeById(id: string): Promise<NewEnrollee | undefined> {
+    const [enrollee] = await db.select().from(newEnrollees).where(eq(newEnrollees.id, id));
+    return enrollee;
+  }
+
+  async createNewEnrollee(data: InsertNewEnrollee): Promise<NewEnrollee> {
+    const [enrollee] = await db
+      .insert(newEnrollees)
+      .values({
+        ...data,
+        id: sql`gen_random_uuid()`,
+      })
+      .returning();
+    return enrollee;
+  }
+
+  async updateNewEnrollee(id: string, data: Partial<InsertNewEnrollee>): Promise<NewEnrollee | undefined> {
+    const [enrollee] = await db
+      .update(newEnrollees)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(newEnrollees.id, id))
+      .returning();
+    return enrollee;
+  }
+
+  async deleteNewEnrollee(id: string): Promise<boolean> {
+    const result = await db.delete(newEnrollees).where(eq(newEnrollees.id, id)).returning();
     return result.length > 0;
   }
 

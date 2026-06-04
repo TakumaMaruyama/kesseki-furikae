@@ -290,6 +290,33 @@ export const insertTrialParticipantSchema = createInsertSchema(trialParticipants
 export type InsertTrialParticipant = z.infer<typeof insertTrialParticipantSchema>;
 export type TrialParticipant = typeof trialParticipants.$inferSelect;
 
+export const newEnrollees = pgTable("new_enrollees", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  childName: varchar("child_name").notNull(),
+  grade: varchar("grade"),
+  classBand: varchar("class_band"),
+  joinedAt: timestamp("joined_at").notNull(),
+  courseId: varchar("course_id").references(() => courses.id, { onDelete: "set null" }),
+  courseNameSnapshot: varchar("course_name_snapshot").notNull(),
+  targetDayOfWeek: varchar("target_day_of_week").notNull(),
+  targetStartTime: varchar("target_start_time").notNull(),
+  sourceTrialParticipantId: varchar("source_trial_participant_id").references(() => trialParticipants.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("IDX_new_enrollees_joined_at").on(table.joinedAt),
+  index("IDX_new_enrollees_target_day_of_week").on(table.targetDayOfWeek),
+  index("IDX_new_enrollees_source_trial_participant_id").on(table.sourceTrialParticipantId),
+]);
+
+export const insertNewEnrolleeSchema = createInsertSchema(newEnrollees).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertNewEnrollee = z.infer<typeof insertNewEnrolleeSchema>;
+export type NewEnrollee = typeof newEnrollees.$inferSelect;
+
 // Holidays
 export const holidays = pgTable("holidays", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -524,6 +551,33 @@ export const updateTrialParticipantRequestSchema = z.object({
   message: "更新項目を指定してください",
 });
 
+export const createNewEnrolleeRequestSchema = z.object({
+  childName: trialParticipantFieldSchema,
+  grade: trialParticipantFieldSchema.optional().or(z.literal("")),
+  classBand: classBandEnum.optional().nullable(),
+  joinedAtISO: z.string().trim().min(1, "入会日を選択してください"),
+  courseId: z.string().trim().min(1, "コースを選択してください"),
+  sourceTrialParticipantId: z.string().trim().optional().nullable(),
+});
+
+export const updateNewEnrolleeRequestSchema = z.object({
+  childName: trialParticipantFieldSchema.optional(),
+  grade: trialParticipantFieldSchema.optional().or(z.literal("")),
+  classBand: classBandEnum.optional().nullable(),
+  joinedAtISO: z.string().trim().min(1, "入会日を選択してください").optional(),
+  courseId: z.string().trim().min(1, "コースを選択してください").optional(),
+  sourceTrialParticipantId: z.string().trim().optional().nullable(),
+}).refine((value) => (
+  value.childName !== undefined ||
+  value.grade !== undefined ||
+  value.classBand !== undefined ||
+  value.joinedAtISO !== undefined ||
+  value.courseId !== undefined ||
+  value.sourceTrialParticipantId !== undefined
+), {
+  message: "更新項目を指定してください",
+});
+
 export const cancelAbsenceRequestSchema = z.object({
   resumeToken: z.string(),
 });
@@ -604,6 +658,8 @@ export type UpdateSlotRequest = z.infer<typeof updateSlotRequestSchema>;
 export type DeleteSlotRequest = z.infer<typeof deleteSlotRequestSchema>;
 export type CreateTrialParticipantRequest = z.infer<typeof createTrialParticipantRequestSchema>;
 export type UpdateTrialParticipantRequest = z.infer<typeof updateTrialParticipantRequestSchema>;
+export type CreateNewEnrolleeRequest = z.infer<typeof createNewEnrolleeRequestSchema>;
+export type UpdateNewEnrolleeRequest = z.infer<typeof updateNewEnrolleeRequestSchema>;
 export type CancelAbsenceRequest = z.infer<typeof cancelAbsenceRequestSchema>;
 export type CancelRequest = z.infer<typeof cancelRequestSchema>;
 export type CreateChildRequest = z.infer<typeof createChildRequestSchema>;
