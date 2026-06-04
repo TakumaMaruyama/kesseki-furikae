@@ -22,9 +22,10 @@ async function hasAbsenceConfirmCode(executor: any, confirmCode: string): Promis
 }
 
 export function isAbsenceConfirmCodeUniqueViolation(error: any): boolean {
+  const constraintName = error?.constraint_name ?? error?.constraint;
   return error?.code === "23505" &&
-    (error?.constraint_name === ABSENCE_CONFIRM_CODE_UNIQUE_INDEX ||
-      error?.constraint === ABSENCE_CONFIRM_CODE_UNIQUE_INDEX);
+    typeof constraintName === "string" &&
+    constraintName.toLowerCase() === ABSENCE_CONFIRM_CODE_UNIQUE_INDEX.toLowerCase();
 }
 
 export async function generateUniqueAbsenceConfirmCode(

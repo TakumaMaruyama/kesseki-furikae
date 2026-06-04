@@ -70,7 +70,7 @@ const COMPAT_MIGRATION_STATEMENTS = [
     IF NOT EXISTS (
       SELECT 1
       FROM pg_indexes
-      WHERE indexname = 'UQ_absences_confirm_code'
+      WHERE lower(indexname) = lower('UQ_absences_confirm_code')
     ) THEN
       IF NOT EXISTS (
         SELECT confirm_code
