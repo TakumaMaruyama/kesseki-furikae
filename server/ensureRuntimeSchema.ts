@@ -65,21 +65,7 @@ const COMPAT_MIGRATION_STATEMENTS = [
     created_at timestamp DEFAULT now()
   )`,
   `CREATE INDEX IF NOT EXISTS IDX_slot_id_aliases_canonical_slot_id ON slot_id_aliases (canonical_slot_id)`,
-  `DO $$
-  BEGIN
-    IF NOT EXISTS (
-      SELECT 1 FROM pg_indexes WHERE indexname = 'uq_absences_confirm_code'
-    ) THEN
-      IF NOT EXISTS (
-        SELECT confirm_code
-        FROM absences
-        GROUP BY confirm_code
-        HAVING COUNT(*) > 1
-      ) THEN
-        CREATE UNIQUE INDEX UQ_absences_confirm_code ON absences (confirm_code);
-      END IF;
-    END IF;
-  END $$`,
+  `DROP INDEX IF EXISTS UQ_absences_confirm_code`,
   `DO $$
   BEGIN
     IF NOT EXISTS (
