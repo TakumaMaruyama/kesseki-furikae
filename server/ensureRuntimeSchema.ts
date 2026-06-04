@@ -68,12 +68,16 @@ const COMPAT_MIGRATION_STATEMENTS = [
   `DO $$
   BEGIN
     IF NOT EXISTS (
-      SELECT confirm_code
-      FROM absences
-      GROUP BY confirm_code
-      HAVING COUNT(*) > 1
+      SELECT 1 FROM pg_indexes WHERE indexname = 'uq_absences_confirm_code'
     ) THEN
-      EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS UQ_absences_confirm_code ON absences (confirm_code)';
+      IF NOT EXISTS (
+        SELECT confirm_code
+        FROM absences
+        GROUP BY confirm_code
+        HAVING COUNT(*) > 1
+      ) THEN
+        CREATE UNIQUE INDEX UQ_absences_confirm_code ON absences (confirm_code);
+      END IF;
     END IF;
   END $$`,
   `DO $$
