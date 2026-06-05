@@ -149,11 +149,16 @@ export type ClassSlotWithTrialParticipantCount = ClassSlot & {
 
 export const slotIdAliases = pgTable("slot_id_aliases", {
   legacySlotId: varchar("legacy_slot_id").primaryKey(),
-  canonicalSlotId: varchar("canonical_slot_id").notNull().references(() => classSlots.id, { onDelete: "cascade" }),
+  canonicalSlotId: varchar("canonical_slot_id").notNull(),
   source: varchar("source").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
-  index("IDX_slot_id_aliases_canonical_slot_id").on(table.canonicalSlotId),
+  index("idx_slot_id_aliases_canonical_slot_id").on(table.canonicalSlotId),
+  foreignKey({
+    columns: [table.canonicalSlotId],
+    foreignColumns: [classSlots.id],
+    name: "slot_id_aliases_canonical_slot_id_fkey",
+  }).onDelete("cascade"),
 ]);
 
 export const insertSlotIdAliasSchema = createInsertSchema(slotIdAliases).omit({
@@ -166,7 +171,7 @@ export type SlotIdAlias = typeof slotIdAliases.$inferSelect;
 export const closureEvents = pgTable("closure_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: varchar("name").notNull(),
-  sharedCode: varchar("shared_code").notNull().unique(),
+  sharedCode: varchar("shared_code").notNull().unique("closure_events_shared_code_key"),
   usageLimit: integer("usage_limit").notNull(),
   usageUsed: integer("usage_used").notNull().default(0),
   expiresAt: timestamp("expires_at").notNull(),
@@ -174,8 +179,8 @@ export const closureEvents = pgTable("closure_events", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
-  index("IDX_closure_events_expires_at").on(table.expiresAt),
-  index("IDX_closure_events_is_archived").on(table.isArchived),
+  index("idx_closure_events_expires_at").on(table.expiresAt),
+  index("idx_closure_events_is_archived").on(table.isArchived),
 ]);
 
 export const insertClosureEventSchema = createInsertSchema(closureEvents).omit({
@@ -189,13 +194,23 @@ export type ClosureEvent = typeof closureEvents.$inferSelect;
 
 export const closureEventSlots = pgTable("closure_event_slots", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  closureEventId: varchar("closure_event_id").notNull().references(() => closureEvents.id, { onDelete: "cascade" }),
-  slotId: varchar("slot_id").notNull().references(() => classSlots.id, { onDelete: "cascade" }),
+  closureEventId: varchar("closure_event_id").notNull(),
+  slotId: varchar("slot_id").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
-  index("IDX_closure_event_slots_event_id").on(table.closureEventId),
-  index("IDX_closure_event_slots_slot_id").on(table.slotId),
-  uniqueIndex("UQ_closure_event_slots_event_slot").on(table.closureEventId, table.slotId),
+  index("idx_closure_event_slots_event_id").on(table.closureEventId),
+  index("idx_closure_event_slots_slot_id").on(table.slotId),
+  uniqueIndex("uq_closure_event_slots_event_slot").on(table.closureEventId, table.slotId),
+  foreignKey({
+    columns: [table.closureEventId],
+    foreignColumns: [closureEvents.id],
+    name: "closure_event_slots_closure_event_id_fkey",
+  }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.slotId],
+    foreignColumns: [classSlots.id],
+    name: "closure_event_slots_slot_id_fkey",
+  }).onDelete("cascade"),
 ]);
 
 export const insertClosureEventSlotSchema = createInsertSchema(closureEventSlots).omit({
@@ -279,12 +294,17 @@ export const trialParticipants = pgTable("trial_participants", {
   participantName: varchar("participant_name").notNull(),
   grade: varchar("grade").notNull(),
   swimLevel: varchar("swim_level").notNull(),
-  slotId: varchar("slot_id").notNull().references(() => classSlots.id, { onDelete: "cascade" }),
+  slotId: varchar("slot_id").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
-  index("IDX_trial_participants_slot_id").on(table.slotId),
-  index("IDX_trial_participants_created_at").on(table.createdAt),
+  index("idx_trial_participants_slot_id").on(table.slotId),
+  index("idx_trial_participants_created_at").on(table.createdAt),
+  foreignKey({
+    columns: [table.slotId],
+    foreignColumns: [classSlots.id],
+    name: "trial_participants_slot_id_fkey",
+  }).onDelete("cascade"),
 ]);
 
 export const insertTrialParticipantSchema = createInsertSchema(trialParticipants).omit({

@@ -1,1 +1,2 @@
 - [Drizzle + Replit Publish pitfalls](drizzle-publish-pitfalls.md) — startup DDL/leftover Prisma break publish validation; connect-pg-simple session table must be declared exactly (json not jsonb); FK names >63 chars cause infinite db:push churn (give explicit short name).
+- [Drizzle publish name divergence](drizzle-publish-name-divergence.md) — Publish migration validator fails when dev/prod share structure but differ in object names; fix by declaring prod's names in schema.ts + db:push.
