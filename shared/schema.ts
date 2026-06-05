@@ -295,6 +295,39 @@ export const insertTrialParticipantSchema = createInsertSchema(trialParticipants
 export type InsertTrialParticipant = z.infer<typeof insertTrialParticipantSchema>;
 export type TrialParticipant = typeof trialParticipants.$inferSelect;
 
+export const newEnrollees = pgTable("new_enrollees", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  childName: varchar("child_name").notNull(),
+  grade: varchar("grade"),
+  classBand: varchar("class_band"),
+  joinedAt: timestamp("joined_at").notNull(),
+  courseId: varchar("course_id").references(() => courses.id, { onDelete: "set null" }),
+  courseNameSnapshot: varchar("course_name_snapshot").notNull(),
+  targetDayOfWeek: varchar("target_day_of_week").notNull(),
+  targetStartTime: varchar("target_start_time").notNull(),
+  sourceTrialParticipantId: varchar("source_trial_participant_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("IDX_new_enrollees_joined_at").on(table.joinedAt),
+  index("IDX_new_enrollees_target_day_of_week").on(table.targetDayOfWeek),
+  index("IDX_new_enrollees_source_trial_participant_id").on(table.sourceTrialParticipantId),
+  foreignKey({
+    columns: [table.sourceTrialParticipantId],
+    foreignColumns: [trialParticipants.id],
+    name: "new_enrollees_source_trial_participant_id_fk",
+  }).onDelete("set null"),
+]);
+
+export const insertNewEnrolleeSchema = createInsertSchema(newEnrollees).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertNewEnrollee = z.infer<typeof insertNewEnrolleeSchema>;
+export type NewEnrollee = typeof newEnrollees.$inferSelect;
+
+
 // Holidays
 export const holidays = pgTable("holidays", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
