@@ -41,23 +41,6 @@ const COMPAT_MIGRATION_STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS IDX_trial_participants_slot_id ON trial_participants (slot_id)`,
   `CREATE INDEX IF NOT EXISTS IDX_trial_participants_created_at ON trial_participants (created_at)`,
-  `CREATE TABLE IF NOT EXISTS new_enrollees (
-    id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
-    child_name varchar NOT NULL,
-    grade varchar,
-    class_band varchar,
-    joined_at timestamp NOT NULL,
-    course_id varchar REFERENCES courses(id) ON DELETE set null,
-    course_name_snapshot varchar NOT NULL,
-    target_day_of_week varchar NOT NULL,
-    target_start_time varchar NOT NULL,
-    source_trial_participant_id varchar REFERENCES trial_participants(id) ON DELETE set null,
-    created_at timestamp DEFAULT now(),
-    updated_at timestamp DEFAULT now()
-  )`,
-  `CREATE INDEX IF NOT EXISTS IDX_new_enrollees_joined_at ON new_enrollees (joined_at)`,
-  `CREATE INDEX IF NOT EXISTS IDX_new_enrollees_target_day_of_week ON new_enrollees (target_day_of_week)`,
-  `CREATE INDEX IF NOT EXISTS IDX_new_enrollees_source_trial_participant_id ON new_enrollees (source_trial_participant_id)`,
   `CREATE TABLE IF NOT EXISTS slot_id_aliases (
     legacy_slot_id varchar PRIMARY KEY,
     canonical_slot_id varchar NOT NULL REFERENCES class_slots(id) ON DELETE cascade,
