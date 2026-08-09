@@ -61,6 +61,25 @@ import {
   generateUniqueAbsenceConfirmCode,
   isAbsenceConfirmCodeUniqueViolation,
 } from "./confirmCode";
+import { getAdminAbsenceHistory, getAdminRequestHistory } from "./adminHistory";
+
+const ADMIN_HISTORY_MONTH_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])$/;
+
+function getAdminHistoryMonth(req: Request, res: Response): string | null {
+  const { month } = req.query;
+  if (typeof month !== "string" || !ADMIN_HISTORY_MONTH_PATTERN.test(month)) {
+    res.status(400).json({ error: "表示月をYYYY-MM形式で指定してください。" });
+    return null;
+  }
+
+  const year = Number(month.slice(0, 4));
+  if (year < 1 || year >= 9999) {
+    res.status(400).json({ error: "表示月をYYYY-MM形式で指定してください。" });
+    return null;
+  }
+
+  return month;
+}
 
 // Admin authentication middleware
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -1046,48 +1065,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Admin: Get all absences for history view
+  // Admin: Get absences for the selected JST month
   app.get("/api/admin/absences", requireAdmin, async (req, res) => {
     try {
-      const allAbsences = await storage.getAllAbsences();
+      const month = getAdminHistoryMonth(req, res);
+      if (!month) return;
 
-      // Enrich with slot info
-      const enrichedAbsences = await Promise.all(
-        allAbsences.map(async (absence) => {
-          const slot = (await resolveAbsenceSlotReference(db, absence))?.slot;
-          return {
-            ...absence,
-            courseLabel: slot?.courseLabel || null,
-            startTime: slot?.startTime || null,
-          };
-        })
-      );
-
-      res.json(enrichedAbsences);
+      res.json(await getAdminAbsenceHistory(month));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
 
-  // Admin: Get all requests for history view
+  // Admin: Get makeup requests for the selected JST destination month
   app.get("/api/admin/requests", requireAdmin, async (req, res) => {
     try {
-      const allRequests = await db.select().from(requests).orderBy(desc(requests.createdAt));
+      const month = getAdminHistoryMonth(req, res);
+      if (!month) return;
 
-      // Enrich with slot info
-      const enrichedRequests = await Promise.all(
-        allRequests.map(async (request) => {
-          const slot = (await resolveRequestSlotReference(db, request))?.slot;
-          return {
-            ...request,
-            courseLabel: slot?.courseLabel || null,
-            toSlotDate: slot ? formatJstDate(slot.date) : null,
-            toSlotStartTime: slot?.startTime || null,
-          };
-        })
-      );
-
-      res.json(enrichedRequests);
+      res.json(await getAdminRequestHistory(month));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

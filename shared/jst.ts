@@ -65,6 +65,27 @@ export function parseJstDateTime(dateISO: string, time: string): Date {
   return new Date(`${year}-${month}-${day}T${normalizedTime}+09:00`);
 }
 
+export function getJstMonthRange(monthISO: string): { start: Date; end: Date } {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(monthISO);
+  if (!match) {
+    throw new Error(`Invalid month format: ${monthISO}`);
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (year < 1 || year >= 9999) {
+    throw new Error(`Invalid month value: ${monthISO}`);
+  }
+
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+
+  return {
+    start: parseJstDate(`${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-01`),
+    end: parseJstDate(`${String(nextYear).padStart(4, "0")}-${String(nextMonth).padStart(2, "0")}-01`),
+  };
+}
+
 export function formatJstDate(input: Date | string | number): string {
   const date = toDate(input);
   const parts = jstDateFormatter.formatToParts(date);

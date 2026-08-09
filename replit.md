@@ -72,7 +72,8 @@
 - `GET /api/admin/lesson-status` - レッスン詳細取得
 - `POST /admin/update-slot-capacity` - 枠容量更新
 - `GET /api/admin/slots` - 全ClassSlot取得
-- `GET /api/admin/absences` - 欠席情報一覧取得
+- `GET /api/admin/absences?month=YYYY-MM` - 指定月の欠席情報一覧取得
+- `GET /api/admin/requests?month=YYYY-MM` - 指定月の振替情報一覧取得
 - `POST /api/admin/create-slot` - ClassSlot作成
 - `PUT /api/admin/update-slot` - ClassSlot更新
 - `DELETE /api/admin/delete-slot` - ClassSlot削除

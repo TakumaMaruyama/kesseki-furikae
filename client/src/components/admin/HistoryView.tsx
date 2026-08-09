@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -18,12 +17,6 @@ import { formatJstDate, parseJstDate } from "@shared/jst";
 import type { SlotSearchResult } from "@shared/schema";
 
 type ClassBand = "初級" | "中級" | "上級";
-
-type MonthGroup<T> = {
-    key: string;
-    label: string;
-    items: T[];
-};
 
 function isClassBand(value: string): value is ClassBand {
     return value === "初級" || value === "中級" || value === "上級";
@@ -59,63 +52,6 @@ function compareNullableTimestampsDesc(aValue: string | null | undefined, bValue
     return 0;
 }
 
-function getMonthKey(input: Date | string | number): string {
-    return formatJstDate(input).slice(0, 7);
-}
-
-function getMonthLabel(input: Date | string | number): string {
-    return format(parseJstDate(formatJstDate(input)), "yyyy年M月", { locale: ja });
-}
-
-function groupItemsByMonth<T>(
-    items: T[],
-    getDate: (item: T) => Date | string | number | null | undefined,
-    fallbackLabel?: string,
-): MonthGroup<T>[] {
-    const grouped = new Map<string, MonthGroup<T>>();
-    const fallbackItems: T[] = [];
-
-    for (const item of items) {
-        const date = getDate(item);
-        if (!date) {
-            fallbackItems.push(item);
-            continue;
-        }
-
-        const key = getMonthKey(date);
-        const existing = grouped.get(key);
-        if (existing) {
-            existing.items.push(item);
-            continue;
-        }
-
-        grouped.set(key, {
-            key,
-            label: getMonthLabel(date),
-            items: [item],
-        });
-    }
-
-    const groups = Array.from(grouped.values()).sort((a, b) => b.key.localeCompare(a.key));
-    if (fallbackLabel && fallbackItems.length > 0) {
-        groups.push({
-            key: "fallback-unknown",
-            label: fallbackLabel,
-            items: fallbackItems,
-        });
-    }
-
-    return groups;
-}
-
-function syncOpenMonthKeys(currentKeys: string[], availableKeys: string[]): string[] {
-    const nextKeys = currentKeys.filter((key) => availableKeys.includes(key));
-    if (nextKeys.length > 0) {
-        return nextKeys;
-    }
-    return availableKeys.slice(0, 1);
-}
-
 function getAbsenceReportTypeBadge(reportType: "ABSENCE" | "LATE") {
     if (reportType === "LATE") {
         return <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300">遅刻</Badge>;
@@ -126,6 +62,7 @@ function getAbsenceReportTypeBadge(reportType: "ABSENCE" | "LATE") {
 export function HistoryView() {
     const { toast } = useToast();
     const [historyTab, setHistoryTab] = useState<"absences" | "requests">("absences");
+    const [selectedMonth, setSelectedMonth] = useState(() => formatJstDate(new Date()).slice(0, 7));
     const [searchTerm, setSearchTerm] = useState("");
     const [bookingTarget, setBookingTarget] = useState<EnrichedAbsence | null>(null);
     const [bookingCandidates, setBookingCandidates] = useState<SlotSearchResult[]>([]);
@@ -139,15 +76,16 @@ export function HistoryView() {
     const [directCandidates, setDirectCandidates] = useState<SlotSearchResult[]>([]);
     const [selectedDirectSlotId, setSelectedDirectSlotId] = useState<string>("");
     const [isLoadingDirectCandidates, setIsLoadingDirectCandidates] = useState(false);
-    const [openAbsenceMonths, setOpenAbsenceMonths] = useState<string[]>([]);
-    const [openRequestMonths, setOpenRequestMonths] = useState<string[]>([]);
-
     const { data: absences, isLoading: loadingAbsences } = useQuery<EnrichedAbsence[]>({
-        queryKey: ["/api/admin/absences"],
+        queryKey: ["/api/admin/absences", selectedMonth],
+        queryFn: () => apiRequest("GET", `/api/admin/absences?month=${encodeURIComponent(selectedMonth)}`),
+        enabled: historyTab === "absences",
     });
 
     const { data: requests, isLoading: loadingRequests } = useQuery<EnrichedRequest[]>({
-        queryKey: ["/api/admin/requests"],
+        queryKey: ["/api/admin/requests", selectedMonth],
+        queryFn: () => apiRequest("GET", `/api/admin/requests?month=${encodeURIComponent(selectedMonth)}`),
+        enabled: historyTab === "requests",
     });
 
     const cancelAbsenceMutation = useMutation({
@@ -158,6 +96,7 @@ export function HistoryView() {
                 description: response.message || "欠席をキャンセルしました。",
             });
             queryClient.invalidateQueries({ queryKey: ["/api/admin/absences"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/admin/requests"] });
             queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard-stats"] });
         },
         onError: (error: any) => {
@@ -177,6 +116,7 @@ export function HistoryView() {
                 description: response.message || "振替をキャンセルしました。",
             });
             queryClient.invalidateQueries({ queryKey: ["/api/admin/requests"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/admin/absences"] });
             queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard-stats"] });
         },
         onError: (error: any) => {
@@ -459,10 +399,6 @@ export function HistoryView() {
         return b.id.localeCompare(a.id);
     });
 
-    const absenceGroups = groupItemsByMonth(sortedAbsences, (absence) => absence.absentDate);
-    const absenceGroupKeys = absenceGroups.map((group) => group.key);
-    const absenceGroupSignature = absenceGroupKeys.join("|");
-
     const filteredRequests = (requests || []).filter((request) =>
         request.childName.toLowerCase().includes(normalizedSearchTerm)
     );
@@ -501,31 +437,6 @@ export function HistoryView() {
 
         return b.id.localeCompare(a.id);
     });
-
-    const requestGroups = groupItemsByMonth(
-        sortedRequests,
-        (request) => request.toSlotDate,
-        "振替先未設定",
-    );
-    const requestGroupKeys = requestGroups.map((group) => group.key);
-    const requestGroupSignature = requestGroupKeys.join("|");
-
-    useEffect(() => {
-        if (hasSearchTerm) {
-            return;
-        }
-        setOpenAbsenceMonths((currentKeys) => syncOpenMonthKeys(currentKeys, absenceGroupKeys));
-    }, [absenceGroupSignature, hasSearchTerm]);
-
-    useEffect(() => {
-        if (hasSearchTerm) {
-            return;
-        }
-        setOpenRequestMonths((currentKeys) => syncOpenMonthKeys(currentKeys, requestGroupKeys));
-    }, [requestGroupSignature, hasSearchTerm]);
-
-    const displayedOpenAbsenceMonths = hasSearchTerm ? absenceGroupKeys : openAbsenceMonths;
-    const displayedOpenRequestMonths = hasSearchTerm ? requestGroupKeys : openRequestMonths;
 
     const getStatusBadge = (status: string) => {
         switch (status) {
@@ -664,7 +575,7 @@ export function HistoryView() {
             <CardHeader className="p-6">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <CardTitle className="text-xl">欠席・振替履歴</CardTitle>
-                    <div className="flex flex-col sm:flex-row gap-2">
+                    <div className="flex flex-col sm:flex-row sm:items-end gap-2">
                         <Button
                             type="button"
                             variant="outline"
@@ -674,6 +585,20 @@ export function HistoryView() {
                         >
                             欠席連絡なしで振替登録
                         </Button>
+                        <label className="space-y-1 text-sm font-medium">
+                            <span className="block">表示月</span>
+                            <Input
+                                type="month"
+                                value={selectedMonth}
+                                onChange={(event) => {
+                                    if (event.target.value) {
+                                        setSelectedMonth(event.target.value);
+                                    }
+                                }}
+                                className="w-full sm:w-40"
+                                data-testid="input-admin-history-month"
+                            />
+                        </label>
                         <Input
                             placeholder="名前で検索..."
                             value={searchTerm}
@@ -688,14 +613,14 @@ export function HistoryView() {
                         size="sm"
                         onClick={() => setHistoryTab("absences")}
                     >
-                        欠席一覧 ({absences?.length || 0})
+                        欠席一覧{absences ? ` (${absences.length})` : ""}
                     </Button>
                     <Button
                         variant={historyTab === "requests" ? "default" : "outline"}
                         size="sm"
                         onClick={() => setHistoryTab("requests")}
                     >
-                        振替一覧 ({requests?.length || 0})
+                        振替一覧{requests ? ` (${requests.length})` : ""}
                     </Button>
                 </div>
             </CardHeader>
@@ -706,33 +631,12 @@ export function HistoryView() {
                             <div className="flex justify-center py-8">
                                 <Loader2 className="w-6 h-6 animate-spin" />
                             </div>
-                        ) : absenceGroups.length === 0 ? (
-                            <p className="text-center text-muted-foreground py-8">欠席・遅刻データがありません</p>
+                        ) : sortedAbsences.length === 0 ? (
+                            <p className="text-center text-muted-foreground py-8">
+                                {hasSearchTerm ? "該当する欠席・遅刻データがありません" : "選択月の欠席・遅刻データがありません"}
+                            </p>
                         ) : (
-                            <Accordion
-                                type="multiple"
-                                value={displayedOpenAbsenceMonths}
-                                onValueChange={setOpenAbsenceMonths}
-                                className="space-y-4"
-                            >
-                                {absenceGroups.map((group) => (
-                                    <AccordionItem
-                                        key={group.key}
-                                        value={group.key}
-                                        className="overflow-hidden rounded-lg border bg-background"
-                                    >
-                                        <AccordionTrigger className="px-4 py-3 text-left hover:no-underline">
-                                            <div className="flex flex-1 items-center justify-between gap-4 pr-4">
-                                                <span className="text-base font-semibold">{group.label}</span>
-                                                <span className="text-sm text-muted-foreground">{group.items.length}件</span>
-                                            </div>
-                                        </AccordionTrigger>
-                                        <AccordionContent>
-                                            <div className="px-4">{renderAbsenceTable(group.items)}</div>
-                                        </AccordionContent>
-                                    </AccordionItem>
-                                ))}
-                            </Accordion>
+                            renderAbsenceTable(sortedAbsences)
                         )}
                     </>
                 )}
@@ -743,33 +647,12 @@ export function HistoryView() {
                             <div className="flex justify-center py-8">
                                 <Loader2 className="w-6 h-6 animate-spin" />
                             </div>
-                        ) : requestGroups.length === 0 ? (
-                            <p className="text-center text-muted-foreground py-8">振替データがありません</p>
+                        ) : sortedRequests.length === 0 ? (
+                            <p className="text-center text-muted-foreground py-8">
+                                {hasSearchTerm ? "該当する振替データがありません" : "選択月の振替データがありません"}
+                            </p>
                         ) : (
-                            <Accordion
-                                type="multiple"
-                                value={displayedOpenRequestMonths}
-                                onValueChange={setOpenRequestMonths}
-                                className="space-y-4"
-                            >
-                                {requestGroups.map((group) => (
-                                    <AccordionItem
-                                        key={group.key}
-                                        value={group.key}
-                                        className="overflow-hidden rounded-lg border bg-background"
-                                    >
-                                        <AccordionTrigger className="px-4 py-3 text-left hover:no-underline">
-                                            <div className="flex flex-1 items-center justify-between gap-4 pr-4">
-                                                <span className="text-base font-semibold">{group.label}</span>
-                                                <span className="text-sm text-muted-foreground">{group.items.length}件</span>
-                                            </div>
-                                        </AccordionTrigger>
-                                        <AccordionContent>
-                                            <div className="px-4">{renderRequestTable(group.items)}</div>
-                                        </AccordionContent>
-                                    </AccordionItem>
-                                ))}
-                            </Accordion>
+                            renderRequestTable(sortedRequests)
                         )}
                     </>
                 )}

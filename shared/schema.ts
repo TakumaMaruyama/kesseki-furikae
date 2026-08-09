@@ -227,6 +227,7 @@ export const absences = pgTable("absences", {
   index("IDX_absences_makeup_status").on(table.makeupStatus),
   index("IDX_absences_original_slot_id").on(table.originalSlotId),
   index("IDX_absences_confirm_code").on(table.confirmCode),
+  index("IDX_absences_absent_date_created_at").on(table.absentDate, table.createdAt),
 ]);
 
 export const insertAbsenceSchema = createInsertSchema(absences).omit({
@@ -260,6 +261,7 @@ export const requests = pgTable("requests", {
   index("IDX_requests_status").on(table.status),
   index("IDX_requests_absence_id").on(table.absenceId),
   index("IDX_requests_confirm_code").on(table.confirmCode),
+  index("IDX_requests_to_slot_start_created_at").on(table.toSlotStartDateTime, table.createdAt),
 ]);
 
 export const insertRequestSchema = createInsertSchema(requests).omit({
