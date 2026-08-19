@@ -117,6 +117,12 @@ function buildResponseError(res: Response, body: ParsedResponseBody): Error {
     if (typeof body.data.rowIndex === "number") {
       error.rowIndex = body.data.rowIndex;
     }
+    if (typeof body.data.code === "string") {
+      error.code = body.data.code;
+    }
+    if (typeof body.data.confirmCode === "string") {
+      error.confirmCode = body.data.confirmCode;
+    }
   }
 
   return error;

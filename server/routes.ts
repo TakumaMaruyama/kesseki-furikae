@@ -487,12 +487,35 @@ type CreatedAbsenceInternal = {
 
 class BatchRowError extends Error {
   rowIndex: number;
+  errorCode?: string;
+  confirmCode?: string;
 
-  constructor(rowIndex: number, message: string) {
+  constructor(
+    rowIndex: number,
+    message: string,
+    details: { errorCode?: string; confirmCode?: string } = {},
+  ) {
     super(message);
     this.name = "BatchRowError";
     this.rowIndex = rowIndex;
+    this.errorCode = details.errorCode;
+    this.confirmCode = details.confirmCode;
   }
+}
+
+class DuplicateAbsenceError extends Error {
+  errorCode = "DUPLICATE_ABSENCE";
+  confirmCode: string;
+
+  constructor(confirmCode: string) {
+    super("同じ時間帯・級・名前の連絡が既に登録されています。");
+    this.name = "DuplicateAbsenceError";
+    this.confirmCode = confirmCode;
+  }
+}
+
+function normalizeAbsenceNameForDuplicate(childName: string): string {
+  return childName.normalize("NFKC").replace(/[\s\u3000]+/g, "");
 }
 
 function normalizeOptionalText(value: string | undefined | null): string | null {
@@ -613,6 +636,33 @@ async function createAbsenceRecordInTransaction(
     if (isSlotStarted(originalSlot, now)) {
       throw new Error("レッスン開始時刻までに欠席連絡がないため、振替登録はできません。");
     }
+  }
+
+  const normalizedChildName = normalizeAbsenceNameForDuplicate(entry.childName);
+  const duplicateLockKey = `absence:${originalSlotRef.canonicalSlotId}:${options.reportType}:${normalizedChildName}`;
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${duplicateLockKey}))`);
+
+  const existingAbsences = await tx
+    .select({
+      childName: absences.childName,
+      declaredClassBand: absences.declaredClassBand,
+      reportType: absences.reportType,
+      makeupStatus: absences.makeupStatus,
+      confirmCode: absences.confirmCode,
+    })
+    .from(absences)
+    .where(and(
+      inArray(absences.originalSlotId, originalSlotRef.knownSlotIds),
+      eq(absences.declaredClassBand, entry.declaredClassBand),
+      eq(absences.reportType, options.reportType),
+      sql`${absences.makeupStatus} NOT IN ('CANCELLED', 'EXPIRED')`,
+    ));
+
+  const duplicateAbsence = existingAbsences.find((existing: { childName: string; confirmCode: string }) => (
+    normalizeAbsenceNameForDuplicate(existing.childName) === normalizedChildName
+  ));
+  if (duplicateAbsence) {
+    throw new DuplicateAbsenceError(duplicateAbsence.confirmCode);
   }
 
   const settings = await storage.getGlobalSettings();
@@ -1940,7 +1990,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "欠席連絡が見つかりません" });
       }
 
-      const result = await cancelAbsenceWithRelated(absence.id, { enforceGraceRule: true });
+      const result = await cancelAbsenceWithRelated(absence.id, { enforceGraceRule: false });
 
       res.json({
         success: true,
@@ -1949,11 +1999,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         alreadyCancelled: result.alreadyCancelled,
       });
     } catch (error: any) {
-      if (error.message === "GRACE_RULE_BLOCKED") {
-        return res.status(400).json({
-          error: "欠席登録から10分以上経過しているため、元のレッスンに空きがない場合は欠席キャンセルできません。",
-        });
-      }
       if (error.message === "ORIGINAL_SLOT_NOT_FOUND") {
         return res.status(400).json({ error: "元のレッスン枠が見つかりません。" });
       }
@@ -2098,6 +2143,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           created.push(item);
         } catch (error: any) {
+          if (error instanceof DuplicateAbsenceError) {
+            throw new BatchRowError(index, error.message, {
+              errorCode: error.errorCode,
+              confirmCode: error.confirmCode,
+            });
+          }
           throw new BatchRowError(index, error.message || "登録に失敗しました。");
         }
       }
@@ -2229,6 +2280,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             if (error instanceof BatchRowError) {
               throw error;
             }
+            if (error instanceof DuplicateAbsenceError) {
+              throw new BatchRowError(index, error.message, {
+                errorCode: error.errorCode,
+                confirmCode: error.confirmCode,
+              });
+            }
             throw new BatchRowError(index, error.message || "登録に失敗しました。");
           }
         }
@@ -2270,9 +2327,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       if (error instanceof BatchRowError) {
-        return res.status(400).json({
+        return res.status(error.errorCode === "DUPLICATE_ABSENCE" ? 409 : 400).json({
           error: error.message,
           rowIndex: error.rowIndex,
+          code: error.errorCode,
+          confirmCode: error.confirmCode,
         });
       }
       if (error.message === "CONFIRM_CODE_EXHAUSTED") {
@@ -2308,9 +2367,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       if (error instanceof BatchRowError) {
-        return res.status(400).json({
+        return res.status(error.errorCode === "DUPLICATE_ABSENCE" ? 409 : 400).json({
           error: error.message,
           rowIndex: error.rowIndex,
+          code: error.errorCode,
+          confirmCode: error.confirmCode,
         });
       }
       if (error.message === "CONFIRM_CODE_EXHAUSTED") {
@@ -2342,6 +2403,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         reportType: created.reportType,
       });
     } catch (error: any) {
+      if (error instanceof BatchRowError) {
+        return res.status(error.errorCode === "DUPLICATE_ABSENCE" ? 409 : 400).json({
+          error: error.message,
+          rowIndex: error.rowIndex,
+          code: error.errorCode,
+          confirmCode: error.confirmCode,
+        });
+      }
       if (error.message === "CONFIRM_CODE_EXHAUSTED") {
         return res.status(503).json({
           error: "確認コードの発行に失敗しました。時間をおいて再度お試しください。",

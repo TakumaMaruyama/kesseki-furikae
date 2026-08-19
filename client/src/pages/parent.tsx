@@ -89,6 +89,15 @@ type ClosureValidationResult = {
   slots: ClassSlotOption[];
 };
 
+type DuplicateAbsenceInfo = {
+  confirmCode: string;
+  childName: string;
+  declaredClassBand: "初級" | "中級" | "上級";
+  absentDateISO: string;
+  reportType: ReportType;
+  rowIndex?: number;
+};
+
 const CLASS_BANDS: Array<"初級" | "中級" | "上級"> = ["初級", "中級", "上級"];
 const EMAIL_NOTICE_START_ISO = "2026-04-13";
 const EMAIL_NOTICE_END_ISO = "2026-04-17";
@@ -216,6 +225,7 @@ export default function ParentPage() {
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [showConfirmCodeDialog, setShowConfirmCodeDialog] = useState(false);
   const [confirmItems, setConfirmItems] = useState<BatchResultItem[]>([]);
+  const [duplicateAbsenceInfo, setDuplicateAbsenceInfo] = useState<DuplicateAbsenceInfo | null>(null);
   const [optionalOpen, setOptionalOpen] = useState(false);
   const reasonInputRef = useRef<HTMLInputElement | null>(null);
   const contactEmailInputRef = useRef<HTMLInputElement | null>(null);
@@ -590,6 +600,21 @@ export default function ParentPage() {
         description: "確認コード一覧を表示しています。",
       });
     } catch (error: any) {
+      if (error?.code === "DUPLICATE_ABSENCE" && error.confirmCode) {
+        const rowIndex = typeof error.rowIndex === "number" ? error.rowIndex : 0;
+        const duplicateRow = data.items[rowIndex] || data.items[0];
+        if (duplicateRow) {
+          setDuplicateAbsenceInfo({
+            confirmCode: error.confirmCode,
+            childName: duplicateRow.childName,
+            declaredClassBand: duplicateRow.declaredClassBand,
+            absentDateISO: duplicateRow.absentDateISO,
+            reportType: data.reportType,
+            rowIndex: typeof error.rowIndex === "number" ? error.rowIndex : undefined,
+          });
+          return;
+        }
+      }
       const rowSuffix = typeof error?.rowIndex === "number" ? `（${error.rowIndex + 1}行目）` : "";
       toast({
         title: "エラー",
@@ -1403,6 +1428,59 @@ export default function ParentPage() {
         </section>
       </main>
 
+
+      <Dialog
+        open={!!duplicateAbsenceInfo}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDuplicateAbsenceInfo(null);
+          }
+        }}
+        modal={false}
+      >
+        <DialogContent className="sm:max-w-md">
+          {duplicateAbsenceInfo && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="text-center text-xl">すでに登録されています</DialogTitle>
+                <DialogDescription className="text-center">
+                  同じ時間帯・級・名前の{getReportTypeLabel(duplicateAbsenceInfo.reportType)}連絡は登録済みです。
+                  {typeof duplicateAbsenceInfo.rowIndex === "number" ? `（${duplicateAbsenceInfo.rowIndex + 1}行目）` : ""}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="rounded-lg border bg-muted/30 p-4 space-y-2">
+                <p className="font-semibold">{duplicateAbsenceInfo.childName}</p>
+                <p className="text-sm text-muted-foreground">
+                  {format(parseLocalDate(duplicateAbsenceInfo.absentDateISO), "yyyy年M月d日(E)", { locale: ja })}
+                  ／{duplicateAbsenceInfo.declaredClassBand}／{getReportTypeLabel(duplicateAbsenceInfo.reportType)}
+                </p>
+                <p className="text-sm text-muted-foreground">登録済みの確認コード</p>
+                <p className="text-center text-3xl font-bold tracking-[0.2em] font-mono text-primary">
+                  {duplicateAbsenceInfo.confirmCode}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => copyText(duplicateAbsenceInfo.confirmCode, "確認コードをコピーしました。")}
+                  data-testid="button-copy-duplicate-confirm-code"
+                >
+                  <CopyIcon className="w-4 h-4 mr-2" />
+                  コードをコピー
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => setDuplicateAbsenceInfo(null)}
+                  data-testid="button-close-duplicate-dialog"
+                >
+                  閉じる
+                </Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showConfirmCodeDialog} onOpenChange={setShowConfirmCodeDialog} modal={false}>
         <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
