@@ -64,38 +64,29 @@ import {
 } from "./confirmCode";
 import { getAdminAbsenceHistory, getAdminRequestHistory } from "./adminHistory";
 
+
 const ADMIN_HISTORY_MONTH_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])$/;
+const COACH_LOGIN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+const coachCredentialUpdateSchema = z.object({
+  loginId: z
+    .string()
+    .trim()
+    .min(1, "ログインIDを入力してください")
+    .max(64, "ログインIDは64文字以内で入力してください")
+    .regex(COACH_LOGIN_ID_PATTERN, "ログインIDは英数字、ピリオド、ハイフン、アンダースコアで入力してください"),
+  password: z
+    .string()
+    .min(8, "パスワードは8文字以上で入力してください")
+    .max(200, "パスワードは200文字以内で入力してください"),
+});
+
+type StaffRole = "admin" | "coach";
 
 function getAdminHistoryMonth(req: Request, res: Response): string | null {
   const { month } = req.query;
   if (typeof month !== "string" || !ADMIN_HISTORY_MONTH_PATTERN.test(month)) {
     res.status(400).json({ error: "表示月をYYYY-MM形式で指定してください。" });
     return null;
-  }
-
-  const year = Number(month.slice(0, 4));
-  if (year < 1 || year >= 9999) {
-    res.status(400).json({ error: "表示月をYYYY-MM形式で指定してください。" });
-    return null;
-  }
-
-  return month;
-}
-
-// Admin authentication middleware
-function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const sess = req.session as any;
-  const isAdmin = sess?.isAdmin === true;
-  if (isAdmin) {
-    next();
-  } else {
-    res.status(401).json({ error: "認証が必要です" });
-  }
-}
-
-function normalizeOptionalAdminField(value?: string | null): string | null | undefined {
-  if (value === undefined) {
-    return undefined;
   }
 
   const year = Number(month.slice(0, 4));
@@ -167,88 +158,6 @@ function requireCoach(req: Request, res: Response, next: NextFunction) {
   } else {
     res.status(401).json({ error: "コーチ認証が必要です" });
   }
-}
-
-async function buildNewEnrolleeCreateData(input: {
-  childName: string;
-  grade?: string | null;
-  classBand?: string | null;
-  joinedAtISO: string;
-  courseId: string;
-  sourceTrialParticipantId?: string | null;
-}): Promise<InsertNewEnrollee> {
-  const course = await storage.getCourseById(input.courseId);
-  if (!course) {
-    throw new Error("COURSE_NOT_FOUND");
-  }
-
-  const sourceTrialParticipantId = normalizeOptionalAdminField(input.sourceTrialParticipantId);
-  if (sourceTrialParticipantId) {
-    const trialParticipant = await storage.getTrialParticipantById(sourceTrialParticipantId);
-    if (!trialParticipant) {
-      throw new Error("TRIAL_PARTICIPANT_NOT_FOUND");
-    }
-  }
-
-  return {
-    childName: input.childName.trim(),
-    grade: normalizeOptionalAdminField(input.grade) ?? null,
-    classBand: input.classBand ?? null,
-    joinedAt: parseJstDate(input.joinedAtISO),
-    courseId: course.id,
-    courseNameSnapshot: course.name.trim(),
-    targetDayOfWeek: course.dayOfWeek,
-    targetStartTime: course.startTime,
-    sourceTrialParticipantId: sourceTrialParticipantId ?? null,
-  };
-}
-
-async function buildNewEnrolleeUpdateData(input: {
-  childName?: string;
-  grade?: string | null;
-  classBand?: string | null;
-  joinedAtISO?: string;
-  courseId?: string;
-  sourceTrialParticipantId?: string | null;
-}): Promise<Partial<InsertNewEnrollee>> {
-  const data: Partial<InsertNewEnrollee> = {};
-
-  if (input.childName !== undefined) {
-    data.childName = input.childName.trim();
-  }
-  if (input.grade !== undefined) {
-    data.grade = normalizeOptionalAdminField(input.grade) ?? null;
-  }
-  if (input.classBand !== undefined) {
-    data.classBand = input.classBand ?? null;
-  }
-  if (input.joinedAtISO !== undefined) {
-    data.joinedAt = parseJstDate(input.joinedAtISO);
-  }
-  if (input.courseId !== undefined) {
-    const course = await storage.getCourseById(input.courseId);
-    if (!course) {
-      throw new Error("COURSE_NOT_FOUND");
-    }
-    data.courseId = course.id;
-    data.courseNameSnapshot = course.name.trim();
-    data.targetDayOfWeek = course.dayOfWeek;
-    data.targetStartTime = course.startTime;
-  }
-  if (input.sourceTrialParticipantId !== undefined) {
-    const sourceTrialParticipantId = normalizeOptionalAdminField(input.sourceTrialParticipantId);
-    if (sourceTrialParticipantId) {
-      const trialParticipant = await storage.getTrialParticipantById(sourceTrialParticipantId);
-      if (!trialParticipant) {
-        throw new Error("TRIAL_PARTICIPANT_NOT_FOUND");
-      }
-      data.sourceTrialParticipantId = sourceTrialParticipantId;
-    } else {
-      data.sourceTrialParticipantId = null;
-    }
-  }
-
-  return data;
 }
 
 async function getClassSlotByExactId(executor: any, slotId: string) {
