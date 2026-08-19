@@ -45,6 +45,7 @@ function StaffRouter() {
 function AppContent() {
   const [location] = useLocation();
   const isAdmin = location === "/admin";
+  const isCoach = location === "/coach";
   const isStaff = isAdmin || location === "/coach";
   const isStatus = location === "/status";
 
@@ -98,7 +99,12 @@ function AppContent() {
   return (
     <>
       {isStaff ? <StaffRouter /> : <MainRouter />}
-      <FloatingActionButtons isAdmin={isAdmin} isStaff={isStaff} isStatus={isStatus} />
+      <FloatingActionButtons
+        isAdmin={isAdmin}
+        isCoach={isCoach}
+        isStaff={isStaff}
+        isStatus={isStatus}
+      />
     </>
   );
 }

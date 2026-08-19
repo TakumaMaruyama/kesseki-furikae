@@ -356,7 +356,7 @@ export const adminCredentials = pgTable("admin_credentials", {
 // Shared coach credentials for read-only daily status access
 export const coachCredentials = pgTable("coach_credentials", {
   id: integer("id").primaryKey().default(1),
-  loginId: varchar("login_id").notNull().unique(),
+  loginId: varchar("login_id").notNull().unique("coach_credentials_login_id_key"),
   passwordHash: varchar("password_hash").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
