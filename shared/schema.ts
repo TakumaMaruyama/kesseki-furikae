@@ -1,4 +1,4 @@
-import { pgTable, varchar, integer, timestamp, text, index, jsonb, boolean, uniqueIndex, foreignKey } from "drizzle-orm/pg-core";
+import { pgTable, varchar, integer, timestamp, text, index, json, boolean, uniqueIndex, foreignKey } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -37,12 +37,12 @@ const requiredClassBandEnum = z.enum(CLASS_BAND_VALUES, {
 export const DEFAULT_RECURRING_SLOT_WEEKS = 52;
 export const MAX_RECURRING_SLOT_WEEKS = 156;
 
-// Session storage table for Replit Auth
-export const sessions = pgTable(
-  "sessions",
+// Session storage table used by connect-pg-simple for staff authentication
+export const adminSessions = pgTable(
+  "admin_sessions",
   {
     sid: varchar("sid").primaryKey(),
-    sess: jsonb("sess").notNull(),
+    sess: json("sess").notNull(),
     expire: timestamp("expire").notNull(),
   },
   (table) => [index("IDX_session_expire").on(table.expire)]
