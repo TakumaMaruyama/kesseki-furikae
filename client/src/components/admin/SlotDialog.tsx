@@ -9,11 +9,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { DEFAULT_RECURRING_SLOT_WEEKS, MAX_RECURRING_SLOT_WEEKS, type ClassSlot, type Course } from "@shared/schema";
+import { DEFAULT_RECURRING_SLOT_WEEKS, MAX_RECURRING_SLOT_WEEKS, type ClassSlotWithTrialParticipantCount, type Course } from "@shared/schema";
 import { addJstDays, formatJstDate, parseJstDate } from "@shared/jst";
+import { getMakeupCapacityLimit } from "@shared/capacity";
 
 export type SlotDialogProps = {
-    slot: ClassSlot | null;
+    slot: ClassSlotWithTrialParticipantCount | null;
     open: boolean;
     onOpenChange: (open: boolean) => void;
     onSave: (data: any) => void;
@@ -77,6 +78,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                 [slot.classBand]: {
                     capacityLimit: slot.capacityLimit,
                     capacityCurrent: slot.capacityCurrent,
+                    trialParticipantCount: slot.trialParticipantCount,
                 }
             };
             setClassBandCapacities(initialCapacities);
@@ -124,6 +126,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                 [band]: {
                     capacityLimit: defaultLimit,
                     capacityCurrent: defaultCurrent,
+                    trialParticipantCount: 0,
                 }
             });
         }
@@ -284,6 +287,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                                                             [band]: {
                                                                 capacityLimit: newLimit,
                                                                 capacityCurrent: current,
+                                                                trialParticipantCount: prev[band]?.trialParticipantCount ?? 0,
                                                             },
                                                         }));
                                                     }}
@@ -305,6 +309,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                                                             [band]: {
                                                                 capacityLimit: limit,
                                                                 capacityCurrent: newCurrent,
+                                                                trialParticipantCount: prev[band]?.trialParticipantCount ?? 0,
                                                             },
                                                         }));
                                                     }}
@@ -316,14 +321,24 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                                                 <Label className="text-xs mb-1 block">振替可能枠（自動計算）</Label>
                                                 <Input
                                                     type="number"
-                                                    value={Math.max(0, (classBandCapacities[band]?.capacityLimit ?? 0) - (classBandCapacities[band]?.capacityCurrent ?? 0))}
+                                                    value={getMakeupCapacityLimit({
+                                                        capacityLimit: classBandCapacities[band]?.capacityLimit ?? 0,
+                                                        capacityCurrent: classBandCapacities[band]?.capacityCurrent ?? 0,
+                                                        capacityMakeupUsed: 0,
+                                                        trialParticipantCount: classBandCapacities[band]?.trialParticipantCount ?? 0,
+                                                    })}
                                                     disabled
                                                     data-testid={`input-${band}-capacitymakeupallowed`}
                                                     className="h-9 bg-muted"
                                                 />
                                                 <p className="text-xs text-muted-foreground mt-1">
-                                                    定員 - 現在の参加者数
+                                                    定員 - 現在の参加者数 - 体験者数
                                                 </p>
+                                                {(classBandCapacities[band]?.trialParticipantCount ?? 0) > 0 && (
+                                                    <p className="text-xs text-muted-foreground mt-1">
+                                                        体験者: {classBandCapacities[band].trialParticipantCount}名（現在人数に含む）
+                                                    </p>
+                                                )}
                                             </div>
                                         </div>
                                     </div>

@@ -41,6 +41,13 @@ const COMPAT_MIGRATION_STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS IDX_trial_participants_slot_id ON trial_participants (slot_id)`,
   `CREATE INDEX IF NOT EXISTS IDX_trial_participants_created_at ON trial_participants (created_at)`,
+  `CREATE TABLE IF NOT EXISTS coach_credentials (
+    id integer PRIMARY KEY DEFAULT 1,
+    login_id varchar NOT NULL UNIQUE,
+    password_hash varchar NOT NULL,
+    created_at timestamp DEFAULT now(),
+    updated_at timestamp DEFAULT now()
+  )`,
   `CREATE TABLE IF NOT EXISTS slot_id_aliases (
     legacy_slot_id varchar PRIMARY KEY,
     canonical_slot_id varchar NOT NULL REFERENCES class_slots(id) ON DELETE cascade,

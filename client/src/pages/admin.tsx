@@ -10,9 +10,10 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ListIcon, CalendarIcon, LogOutIcon, Loader2, ArchiveIcon } from "lucide-react";
-import type { ClassSlot } from "@shared/schema";
+import { useLocation } from "wouter";
+import type { ClassSlotWithTrialParticipantCount } from "@shared/schema";
 import { formatJstDate, parseJstDate } from "@shared/jst";
-import { getRemainingCapacity } from "@shared/capacity";
+import { getMakeupCapacityLimit, getRemainingCapacity } from "@shared/capacity";
 import { Calendar } from "@/components/ui/calendar";
 
 // Import extracted admin components
@@ -24,7 +25,9 @@ import {
   CoursesManagement,
   LessonsStatusView,
   SlotDialog,
+  CoachAccountSettings,
 } from "@/components/admin";
+import type { StaffRole } from "@/components/admin/types";
 
 const CLASS_BAND_ORDER: Record<string, number> = {
   初級: 0,
@@ -36,18 +39,18 @@ function getClassBandOrder(classBand: string): number {
   return CLASS_BAND_ORDER[classBand] ?? Number.MAX_SAFE_INTEGER;
 }
 
-function sortByStartTimeThenClassBand(a: ClassSlot, b: ClassSlot): number {
+function sortByStartTimeThenClassBand(a: ClassSlotWithTrialParticipantCount, b: ClassSlotWithTrialParticipantCount): number {
   const timeCompare = a.startTime.localeCompare(b.startTime);
   if (timeCompare !== 0) return timeCompare;
   return getClassBandOrder(a.classBand) - getClassBandOrder(b.classBand);
 }
 
-function sortByClassBand(a: ClassSlot, b: ClassSlot): number {
+function sortByClassBand(a: ClassSlotWithTrialParticipantCount, b: ClassSlotWithTrialParticipantCount): number {
   return getClassBandOrder(a.classBand) - getClassBandOrder(b.classBand);
 }
 
-function groupSlotsByStartTime(slots: ClassSlot[]): Record<string, ClassSlot[]> {
-  const grouped: Record<string, ClassSlot[]> = {};
+function groupSlotsByStartTime(slots: ClassSlotWithTrialParticipantCount[]): Record<string, ClassSlotWithTrialParticipantCount[]> {
+  const grouped: Record<string, ClassSlotWithTrialParticipantCount[]> = {};
   for (const slot of slots) {
     if (!grouped[slot.startTime]) {
       grouped[slot.startTime] = [];
@@ -85,11 +88,12 @@ type ClosureEventSummary = {
 
 export default function AdminPage() {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [editingSlots, setEditingSlots] = useState<Set<string>>(new Set());
   const [capacityValues, setCapacityValues] = useState<Record<string, any>>({});
   const [showSlotDialog, setShowSlotDialog] = useState(false);
-  const [editingSlotData, setEditingSlotData] = useState<ClassSlot | null>(null);
+  const [editingSlotData, setEditingSlotData] = useState<ClassSlotWithTrialParticipantCount | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "calendar">("calendar");
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
   const [selectedSlots, setSelectedSlots] = useState<Set<string>>(new Set());
@@ -106,26 +110,30 @@ export default function AdminPage() {
   useEffect(() => {
     async function checkAuth() {
       try {
-        const response = await fetch("/api/admin/check", { credentials: "include" });
+        const response = await fetch("/api/staff/check", { credentials: "include" });
         const data = await response.json();
-        setIsAuthenticated(data.authenticated);
+        if (data.authenticated && data.role === "coach") {
+          setLocation("/coach");
+          return;
+        }
+        setIsAuthenticated(data.authenticated && data.role === "admin");
       } catch (error) {
         setIsAuthenticated(false);
       }
     }
     checkAuth();
-  }, []);
+  }, [setLocation]);
 
   const handleLogout = async () => {
     try {
-      await apiRequest("POST", "/api/admin/logout", {});
+      await apiRequest("POST", "/api/staff/logout", {});
       setIsAuthenticated(false);
     } catch (error) {
       console.error("Logout error:", error);
     }
   };
 
-  const { data: allSlots, isLoading: loadingSlots } = useQuery<ClassSlot[]>({
+  const { data: allSlots, isLoading: loadingSlots } = useQuery<ClassSlotWithTrialParticipantCount[]>({
     queryKey: ["/api/admin/slots"],
     enabled: isAuthenticated === true,
   });
@@ -487,7 +495,7 @@ export default function AdminPage() {
     };
   };
 
-  const confirmAndDeleteSlot = async (slot: ClassSlot) => {
+  const confirmAndDeleteSlot = async (slot: ClassSlotWithTrialParticipantCount) => {
     try {
       const applyToFuture = confirm(
         "削除範囲を選択してください。\n\nOK: この日以降の同一枠（同曜日・同時刻・同クラス帯・同コース名）も削除\nキャンセル: この枠のみ削除"
@@ -530,7 +538,17 @@ export default function AdminPage() {
   }
 
   if (!isAuthenticated) {
-    return <AdminLoginForm onSuccess={() => setIsAuthenticated(true)} />;
+    return (
+      <AdminLoginForm
+        onSuccess={(role: StaffRole) => {
+          if (role === "coach") {
+            setLocation("/coach");
+            return;
+          }
+          setIsAuthenticated(true);
+        }}
+      />
+    );
   }
 
   return (
@@ -539,6 +557,7 @@ export default function AdminPage() {
         <div className="container flex h-16 items-center justify-between px-6">
           <h1 className="text-xl font-bold">はまスイ 管理画面</h1>
           <div className="flex items-center gap-2">
+            <CoachAccountSettings />
             <Button
               variant="ghost"
               size="sm"
@@ -746,7 +765,7 @@ export default function AdminPage() {
                                                 <div className="grid grid-cols-2 gap-2 text-sm">
                                                   <div>
                                                     <span className="text-muted-foreground">振替可能枠: </span>
-                                                    <span className="font-semibold">{Math.max(0, slot.capacityLimit - slot.capacityCurrent)}</span>
+                                                    <span className="font-semibold">{getMakeupCapacityLimit(slot)}</span>
                                                   </div>
                                                   <div>
                                                     <span className="text-muted-foreground">使用済み: </span>
@@ -810,7 +829,7 @@ export default function AdminPage() {
                         }
                         acc[dateKey].push(slot);
                         return acc;
-                      }, {} as Record<string, ClassSlot[]>);
+                      }, {} as Record<string, ClassSlotWithTrialParticipantCount[]>);
 
                       // 日付順にソート
                       const sortedDates = Object.keys(slotsByDate).sort();
@@ -878,7 +897,7 @@ export default function AdminPage() {
                                                 <div>
                                                   <p className="text-xs text-muted-foreground mb-1">振替可能枠（自動計算）</p>
                                                   <p className="font-semibold">
-                                                    {Math.max(0, slot.capacityLimit - slot.capacityCurrent)} 枠
+                                                    {getMakeupCapacityLimit(slot)} 枠
                                                   </p>
                                                   <p className="text-xs text-muted-foreground">
                                                     使用済み: {slot.capacityMakeupUsed}

@@ -22,13 +22,14 @@ import {
   validateClosureCodeRequestSchema,
   redeemClosureCodeRequestSchema,
 } from "@shared/schema";
+import type { BookRequest } from "@shared/schema";
 import { sendConfirmationEmail, sendExpiredEmail, sendAbsenceConfirmationEmail, sendMakeupConfirmationEmail, sendCancellationEmail, sendRequestCancellationEmail } from "./email-service";
 import { createId } from "@paralleldrive/cuid2";
 import { format, addDays } from "date-fns";
 import { ja } from "date-fns/locale";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
-import { ZodError } from "zod";
+import { ZodError, z } from "zod";
 import {
   addJstDays,
   endOfJstDay,
@@ -64,6 +65,21 @@ import {
 import { getAdminAbsenceHistory, getAdminRequestHistory } from "./adminHistory";
 
 const ADMIN_HISTORY_MONTH_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])$/;
+const COACH_LOGIN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+const coachCredentialUpdateSchema = z.object({
+  loginId: z
+    .string()
+    .trim()
+    .min(1, "ログインIDを入力してください")
+    .max(64, "ログインIDは64文字以内で入力してください")
+    .regex(COACH_LOGIN_ID_PATTERN, "ログインIDは英数字、ピリオド、ハイフン、アンダースコアで入力してください"),
+  password: z
+    .string()
+    .min(8, "パスワードは8文字以上で入力してください")
+    .max(200, "パスワードは200文字以内で入力してください"),
+});
+
+type StaffRole = "admin" | "coach";
 
 function getAdminHistoryMonth(req: Request, res: Response): string | null {
   const { month } = req.query;
@@ -81,14 +97,65 @@ function getAdminHistoryMonth(req: Request, res: Response): string | null {
   return month;
 }
 
-// Admin authentication middleware
-function requireAdmin(req: Request, res: Response, next: NextFunction) {
+function getStaffRole(req: Request): StaffRole | null {
   const sess = req.session as any;
-  const isAdmin = sess?.isAdmin === true;
-  if (isAdmin) {
+
+  if (sess?.staffRole === "admin" || sess?.staffRole === "coach") {
+    return sess.staffRole;
+  }
+
+  // Keep existing administrator sessions valid after the role field is added.
+  return sess?.isAdmin === true ? "admin" : null;
+}
+
+function saveStaffSession(req: Request, role: StaffRole): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((regenerateError) => {
+      if (regenerateError) {
+        reject(regenerateError);
+        return;
+      }
+
+      const session = req.session as any;
+      session.staffRole = role;
+      session.isAdmin = role === "admin";
+      req.session.save((saveError) => {
+        if (saveError) {
+          reject(saveError);
+          return;
+        }
+        resolve();
+      });
+    });
+  });
+}
+
+function destroyStaffSession(req: Request, res: Response): void {
+  req.session.destroy((error) => {
+    if (error) {
+      res.status(500).json({ error: "ログアウトに失敗しました" });
+      return;
+    }
+    res.clearCookie("connect.sid");
+    res.json({ success: true });
+  });
+}
+
+// Administrator-only authentication middleware
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (getStaffRole(req) === "admin") {
     next();
   } else {
     res.status(401).json({ error: "認証が必要です" });
+  }
+}
+
+// Coach-only authentication middleware. Coach sessions never pass requireAdmin.
+function requireCoach(req: Request, res: Response, next: NextFunction) {
+  if (getStaffRole(req) === "coach") {
+    next();
+  } else {
+    res.status(401).json({ error: "コーチ認証が必要です" });
   }
 }
 
@@ -99,6 +166,25 @@ async function getClassSlotByExactId(executor: any, slotId: string) {
     .where(eq(classSlots.id, slotId))
     .limit(1);
   return slot;
+}
+
+async function getTrialParticipantCountForSlot(executor: any, slotId: string): Promise<number> {
+  const [row] = await executor
+    .select({ count: sql<number>`count(*)` })
+    .from(trialParticipants)
+    .where(eq(trialParticipants.slotId, slotId));
+
+  return Number(row?.count || 0);
+}
+
+function withTrialParticipantCount<T extends typeof classSlots.$inferSelect>(
+  slot: T,
+  trialParticipantCount: number,
+) {
+  return {
+    ...slot,
+    trialParticipantCount,
+  };
 }
 
 async function rekeyDriftedSlotId(args: {
@@ -239,12 +325,123 @@ async function getSlotAbsencesAndMakeups(slotId: string) {
 
   const slotAbsences = await storage.getAbsencesByOriginalSlotId(slotId);
   const makeupRequests = await storage.getConfirmedRequestsBySlotId(slotId);
+  const trialParticipantCount = await getTrialParticipantCountForSlot(db, slot.id);
 
   return {
-    slot,
+    slot: withTrialParticipantCount(slot, trialParticipantCount),
     absences: slotAbsences,
     makeupRequests,
   };
+}
+
+type DailyStatusAbsentee = {
+  childName: string;
+  courseLabel: string;
+  classBand: string;
+  startTime: string;
+  reportType: "ABSENCE" | "LATE";
+};
+
+type DailyStatusMakeup = {
+  childName: string;
+  courseLabel: string;
+  classBand: string;
+  startTime: string;
+};
+
+type DailyStatusTrialParticipant = {
+  id: string;
+  participantName: string;
+  grade: string;
+  swimLevel: string;
+  slotId: string;
+  courseLabel: string;
+  classBand: string;
+  startTime: string;
+};
+
+type DailyStatusData = {
+  date: string;
+  absentees: DailyStatusAbsentee[];
+  makeups: DailyStatusMakeup[];
+  trialParticipants: DailyStatusTrialParticipant[];
+};
+
+async function getDailyStatusForDate(targetDate: Date): Promise<DailyStatusData> {
+  const slots = await storage.getClassSlotsByDate(targetDate);
+  const absentees: DailyStatusAbsentee[] = [];
+  const makeups: DailyStatusMakeup[] = [];
+
+  for (const slot of slots) {
+    const slotAbsences = await storage.getAbsencesByOriginalSlotId(slot.id);
+    for (const absence of slotAbsences) {
+      absentees.push({
+        childName: absence.childName,
+        courseLabel: slot.courseLabel,
+        classBand: slot.classBand,
+        startTime: slot.startTime,
+        reportType: absence.reportType as "ABSENCE" | "LATE",
+      });
+    }
+
+    const slotMakeups = await storage.getConfirmedRequestsBySlotId(slot.id);
+    for (const request of slotMakeups) {
+      makeups.push({
+        childName: request.childName,
+        courseLabel: slot.courseLabel,
+        classBand: slot.classBand,
+        startTime: slot.startTime,
+      });
+    }
+  }
+
+  const trialParticipants = (await storage.getTrialParticipantsByDate(targetDate)).map((participant) => ({
+    id: participant.id,
+    participantName: participant.participantName,
+    grade: participant.grade,
+    swimLevel: participant.swimLevel,
+    slotId: participant.slotId,
+    courseLabel: participant.courseLabel,
+    classBand: participant.classBand,
+    startTime: participant.startTime,
+  }));
+
+  const sortByTimeAndName = (a: { startTime: string; childName: string }, b: { startTime: string; childName: string }) => {
+    const timeCompare = a.startTime.localeCompare(b.startTime);
+    if (timeCompare !== 0) return timeCompare;
+    return a.childName.localeCompare(b.childName, "ja");
+  };
+
+  absentees.sort(sortByTimeAndName);
+  makeups.sort(sortByTimeAndName);
+  trialParticipants.sort((a, b) => {
+    const timeCompare = a.startTime.localeCompare(b.startTime);
+    if (timeCompare !== 0) return timeCompare;
+    return a.participantName.localeCompare(b.participantName, "ja");
+  });
+
+  return {
+    date: formatJstDate(targetDate),
+    absentees,
+    makeups,
+    trialParticipants,
+  };
+}
+
+function resolveDailyStatusDate(value: unknown): Date {
+  if (value === undefined) {
+    return startOfJstDay(new Date());
+  }
+
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error("DAILY_STATUS_DATE_INVALID");
+  }
+
+  const targetDate = parseJstDate(value);
+  if (formatJstDate(targetDate) !== value) {
+    throw new Error("DAILY_STATUS_DATE_INVALID");
+  }
+  return targetDate;
 }
 
 type AbsenceEntryInput = {
@@ -540,7 +737,11 @@ async function cancelAbsenceWithRelated(absenceId: string, options: CancelAbsenc
       if (!originalSlot) {
         throw new Error("ORIGINAL_SLOT_NOT_FOUND");
       }
-      if (!hasRemainingCapacity(originalSlot, 1)) {
+      const trialParticipantCount = await getTrialParticipantCountForSlot(
+        tx,
+        originalSlotRef.canonicalSlotId,
+      );
+      if (!hasRemainingCapacity({ ...originalSlot, trialParticipantCount }, 1)) {
         throw new Error("GRACE_RULE_BLOCKED");
       }
     }
@@ -688,6 +889,249 @@ async function cancelRequestUnified(requestId: string): Promise<CancelRequestRes
   });
 }
 
+type MakeupBookingOptions = {
+  allowOverCapacity: boolean;
+  requireAbsence: boolean;
+};
+
+async function createMakeupBooking(data: BookRequest, options: MakeupBookingOptions) {
+  const now = new Date();
+  const cancelToken = createId();
+  const requestId = createId();
+
+  const bookingResult = await db.transaction(async (tx) => {
+    const slotRef = await resolveSlotReference(tx, data.toSlotId);
+    const slot = slotRef?.slot;
+    if (!slotRef || !slot) {
+      throw new Error("BOOK_SLOT_NOT_FOUND");
+    }
+
+    if (slot.classBand !== data.declaredClassBand) {
+      throw new Error("BOOK_CLASS_BAND_MISMATCH");
+    }
+
+    if (slot.isClosed) {
+      throw new Error("BOOK_SLOT_CLOSED");
+    }
+
+    const slotStartDateTime = getCanonicalSlotStartDateTime(slot);
+    if (isSlotStarted(slot, now)) {
+      throw new Error("BOOK_SLOT_STARTED");
+    }
+
+    const trialParticipantCount = await getTrialParticipantCountForSlot(
+      tx,
+      slotRef.canonicalSlotId,
+    );
+    if (!options.allowOverCapacity && !hasRemainingCapacity({ ...slot, trialParticipantCount }, 1)) {
+      throw new Error("BOOK_SLOT_FULL");
+    }
+
+    const duplicateRequest = await tx.select({ id: requests.id }).from(requests).where(and(
+      eq(requests.status, "確定"),
+      eq(requests.childName, data.childName),
+      eq(requests.toSlotStartDateTime, slotStartDateTime),
+    ));
+    if (duplicateRequest.length > 0) {
+      throw new Error("BOOK_DUPLICATE_CHILD");
+    }
+
+    if (options.requireAbsence && !data.absenceId) {
+      throw new Error("BOOK_ABSENCE_REQUIRED");
+    }
+
+    let confirmCode: string | null = null;
+    let txContactEmail: string | null = null;
+    let claimedAbsenceId: string | null = null;
+    if (data.absenceId) {
+      const [absence] = await tx.select().from(absences).where(eq(absences.id, data.absenceId));
+      if (!absence) {
+        throw new Error("BOOK_ABSENCE_NOT_FOUND");
+      }
+      if (
+        absence.childName !== data.childName
+        || absence.declaredClassBand !== data.declaredClassBand
+        || formatJstDate(absence.absentDate) !== data.absentDateISO
+      ) {
+        throw new Error("BOOK_ABSENCE_MISMATCH");
+      }
+      if (isAbsenceCancelledStatus(absence.makeupStatus)) {
+        throw new Error("BOOK_ABSENCE_CANCELLED");
+      }
+      if (absence.reportType === "LATE") {
+        throw new Error("BOOK_LATE_NOT_BOOKABLE");
+      }
+      if (absence.makeupStatus !== "PENDING") {
+        throw new Error("BOOK_ABSENCE_NOT_PENDING");
+      }
+      if (isDeadlineExpired(absence.makeupDeadline, now)) {
+        throw new Error("BOOK_ABSENCE_DEADLINE");
+      }
+
+      const alreadyConfirmed = await tx.select().from(requests).where(and(
+        eq(requests.absenceId, absence.id),
+        eq(requests.status, "確定"),
+      ));
+      if (alreadyConfirmed.length > 0) {
+        throw new Error("BOOK_ABSENCE_ALREADY_CONFIRMED");
+      }
+
+      const [claimedAbsence] = await tx
+        .update(absences)
+        .set({
+          makeupStatus: "MAKEUP_CONFIRMED",
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(absences.id, absence.id),
+          eq(absences.makeupStatus, "PENDING"),
+        ))
+        .returning();
+      if (!claimedAbsence) {
+        throw new Error("BOOK_ABSENCE_NOT_PENDING");
+      }
+
+      claimedAbsenceId = claimedAbsence.id;
+      txContactEmail = claimedAbsence.contactEmail;
+      confirmCode = claimedAbsence.confirmCode;
+    }
+
+    const capacityCondition = options.allowOverCapacity
+      ? eq(classSlots.id, slotRef.canonicalSlotId)
+      : and(
+          eq(classSlots.id, slotRef.canonicalSlotId),
+          sql`${classSlots.capacityLimit} - ${classSlots.capacityCurrent} - ${classSlots.capacityMakeupUsed} - (
+            SELECT COUNT(*)
+            FROM ${trialParticipants}
+            WHERE ${trialParticipants.slotId} = ${classSlots.id}
+          ) >= 1`,
+        );
+
+    const [updatedSlot] = await tx
+      .update(classSlots)
+      .set({
+        capacityMakeupUsed: sql`${classSlots.capacityMakeupUsed} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(capacityCondition)
+      .returning();
+    if (!updatedSlot) {
+      throw new Error("BOOK_SLOT_FULL");
+    }
+
+    const [request] = await tx.insert(requests).values({
+      id: requestId,
+      userId: null,
+      childId: data.childId || null,
+      absenceId: claimedAbsenceId || data.absenceId || null,
+      childName: data.childName,
+      declaredClassBand: data.declaredClassBand,
+      absentDate: parseJstDate(data.absentDateISO),
+      toSlotId: slotRef.canonicalSlotId,
+      status: "確定",
+      contactEmail: txContactEmail,
+      confirmToken: null,
+      declineToken: null,
+      cancelToken,
+      confirmCode,
+      toSlotStartDateTime: slotStartDateTime,
+    }).returning();
+
+    return {
+      contactEmail: txContactEmail,
+      slotForEmail: {
+        courseLabel: updatedSlot.courseLabel,
+        date: updatedSlot.date,
+        startTime: updatedSlot.startTime,
+        classBand: updatedSlot.classBand,
+      },
+      requestIdForEmail: request.id,
+    };
+  });
+
+  return {
+    ...bookingResult,
+    cancelToken,
+  };
+}
+
+function respondMakeupBookingError(res: Response, error: any) {
+  if (error.message === "BOOK_SLOT_NOT_FOUND") {
+    return res.status(404).json({ success: false, message: "指定された枠が見つかりません。" });
+  }
+  if (error.message === "BOOK_CLASS_BAND_MISMATCH") {
+    return res.status(400).json({ success: false, message: "クラス帯が一致しません。" });
+  }
+  if (error.message === "BOOK_SLOT_STARTED") {
+    return res.status(400).json({ success: false, message: "この枠は開始時刻を過ぎているため予約できません。" });
+  }
+  if (error.message === "BOOK_SLOT_FULL") {
+    return res.status(400).json({ success: false, message: "この枠は満席のため予約できません。" });
+  }
+  if (error.message === "BOOK_SLOT_CLOSED") {
+    return res.status(400).json({ success: false, message: "この枠は休講のため予約できません。" });
+  }
+  if (error.message === "BOOK_DUPLICATE_CHILD") {
+    return res.status(400).json({
+      success: false,
+      message: "同じお子様は既にこの枠に登録済みです。重複して登録することはできません。",
+    });
+  }
+  if (error.message === "BOOK_ABSENCE_REQUIRED") {
+    return res.status(400).json({ success: false, message: "公開予約には欠席情報が必要です。" });
+  }
+  if (error.message === "BOOK_ABSENCE_MISMATCH") {
+    return res.status(400).json({ success: false, message: "欠席情報と予約内容が一致しません。" });
+  }
+  if (error.message === "BOOK_ABSENCE_NOT_FOUND") {
+    return res.status(400).json({ success: false, message: "欠席情報が見つかりません。" });
+  }
+  if (error.message === "BOOK_ABSENCE_CANCELLED") {
+    return res.status(400).json({ success: false, message: "キャンセル済みの欠席連絡では予約できません。" });
+  }
+  if (error.message === "BOOK_LATE_NOT_BOOKABLE") {
+    return res.status(400).json({ success: false, message: "遅刻連絡では振替予約できません。" });
+  }
+  if (error.message === "BOOK_ABSENCE_NOT_PENDING") {
+    return res.status(400).json({ success: false, message: "この欠席連絡は現在予約可能な状態ではありません。" });
+  }
+  if (error.message === "BOOK_ABSENCE_DEADLINE") {
+    return res.status(400).json({ success: false, message: "振替期限が過ぎているため予約できません。" });
+  }
+  if (error.message === "BOOK_ABSENCE_ALREADY_CONFIRMED") {
+    return res.status(400).json({ success: false, message: "この欠席連絡は既に振替予約が確定しています。" });
+  }
+  return res.status(400).json({ error: error.message });
+}
+
+async function handleMakeupBooking(req: Request, res: Response, options: MakeupBookingOptions) {
+  try {
+    const data = bookRequestSchema.parse(req.body);
+    const bookingResult = await createMakeupBooking(data, options);
+
+    if (bookingResult.contactEmail) {
+      try {
+        await sendMakeupConfirmationEmail(
+          bookingResult.contactEmail,
+          data.childName,
+          bookingResult.slotForEmail.courseLabel,
+          format(bookingResult.slotForEmail.date, "yyyy年M月d日(E)", { locale: ja }),
+          bookingResult.slotForEmail.startTime,
+          bookingResult.slotForEmail.classBand,
+          bookingResult.requestIdForEmail,
+          bookingResult.cancelToken,
+        );
+      } catch (error: any) {
+        console.error("振替確定メール送信エラー:", error.message);
+      }
+    }
+
+    return res.json({ success: true, status: "確定", message: "振替予約が成立しました。" });
+  } catch (error: any) {
+    return respondMakeupBookingError(res, error);
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Validate session secret in production
   const sessionSecret = process.env.SESSION_SECRET;
@@ -734,44 +1178,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })
   );
 
-  // Admin authentication endpoints
+  // Shared administrator/coach authentication endpoint
   app.post("/api/admin/login", async (req, res) => {
-    const { password } = req.body;
-
     try {
-      const adminPasswordHash = await storage.getAdminPasswordHash();
+      const rawLoginId = typeof req.body?.loginId === "string" ? req.body.loginId.trim() : "";
+      const loginId = rawLoginId || "admin";
+      const password = typeof req.body?.password === "string" ? req.body.password : "";
 
-      if (!adminPasswordHash) {
-        return res.status(500).json({ error: "管理者パスワードが設定されていません" });
+      if (!password) {
+        return res.status(401).json({ error: "ログインIDまたはパスワードが正しくありません" });
       }
 
-      const isMatch = await import("bcryptjs").then(b => b.default.compare(password, adminPasswordHash));
+      const bcrypt = await import("bcryptjs");
+      let role: StaffRole | null = null;
+      let passwordHash: string | undefined;
+
+      if (loginId === "admin") {
+        role = "admin";
+        passwordHash = await storage.getAdminPasswordHash();
+      } else {
+        const coachCredential = await storage.getCoachCredential();
+        if (coachCredential && coachCredential.loginId === loginId) {
+          role = "coach";
+          passwordHash = coachCredential.passwordHash;
+        }
+      }
+
+      if (!role || !passwordHash) {
+        return res.status(401).json({ error: "ログインIDまたはパスワードが正しくありません" });
+      }
+
+      const isMatch = await bcrypt.default.compare(password, passwordHash);
 
       if (isMatch) {
-        (req.session as any).isAdmin = true;
-        res.json({ success: true });
+        await saveStaffSession(req, role);
+        return res.json({ success: true, role });
       } else {
-        res.status(401).json({ error: "パスワードが正しくありません" });
+        return res.status(401).json({ error: "ログインIDまたはパスワードが正しくありません" });
       }
+    } catch (error: any) {
+      console.error("スタッフログインエラー:", error);
+      res.status(500).json({ error: "認証処理に失敗しました" });
+    }
+  });
+
+  app.get("/api/admin/check", (req, res) => {
+    const role = getStaffRole(req);
+    res.json({ authenticated: role === "admin", role: role === "admin" ? "admin" : null });
+  });
+
+  app.get("/api/staff/check", (req, res) => {
+    const role = getStaffRole(req);
+    res.json({ authenticated: role !== null, role });
+  });
+
+  app.post("/api/staff/logout", (req, res) => {
+    destroyStaffSession(req, res);
+  });
+
+  // Keep the old endpoint available for existing admin clients.
+  app.post("/api/admin/logout", (req, res) => {
+    destroyStaffSession(req, res);
+  });
+
+  app.get("/api/admin/coach-account", requireAdmin, async (_req, res) => {
+    try {
+      const credential = await storage.getCoachCredential();
+      res.json({
+        configured: Boolean(credential),
+        loginId: credential?.loginId ?? "",
+      });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
 
-  app.get("/api/admin/check", (req, res) => {
-    const session = req.session as any;
-    const isAdmin = session?.isAdmin === true;
-    if (isAdmin) {
-      res.json({ authenticated: true });
-    } else {
-      res.json({ authenticated: false });
-    }
-  });
+  app.put("/api/admin/coach-account", requireAdmin, async (req, res) => {
+    try {
+      const data = coachCredentialUpdateSchema.parse(req.body);
+      if (data.loginId.toLowerCase() === "admin") {
+        return res.status(400).json({ error: "コーチIDにadminは使用できません" });
+      }
 
-  app.post("/api/admin/logout", (req, res) => {
-    const session = req.session as any;
-    session.isAdmin = false;
-    res.json({ success: true });
+      const bcrypt = await import("bcryptjs");
+      const passwordHash = await bcrypt.default.hash(data.password, 10);
+      const credential = await storage.upsertCoachCredential(data.loginId, passwordHash);
+
+      res.json({
+        success: true,
+        configured: true,
+        loginId: credential.loginId,
+      });
+    } catch (error: any) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({ error: error.issues[0]?.message || "入力内容を確認してください" });
+      }
+      res.status(500).json({ error: error.message });
+    }
   });
 
   // Lookup by confirm code (for parents to check their status)
@@ -1041,7 +1544,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         slots.map(async (slot) => {
           const status = await getSlotAbsencesAndMakeups(slot.id);
           return {
-            ...slot,
+            ...(status?.slot || slot),
             absenceCount: status?.absences.filter((absence) => absence.reportType === "ABSENCE").length || 0,
             makeupCount: status?.makeupRequests.length || 0,
           };
@@ -1317,96 +1820,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Admin: Daily status - get absences and makeups for a specific date
+  // Admin: Daily status - get detailed absences, makeups, and trial participants.
   app.get("/api/admin/daily-status", requireAdmin, async (req, res) => {
     try {
-      const { date } = req.query;
-
-      const targetDate = date && typeof date === "string"
-        ? parseJstDate(date)
-        : startOfJstDay(new Date());
-
-      // Get all slots for the target date
-      const slots = await storage.getClassSlotsByDate(targetDate);
-
-      // Collect absences (students absent from this date's lessons)
-      const absentees: Array<{
-        childName: string;
-        courseLabel: string;
-        classBand: string;
-        startTime: string;
-        reportType: "ABSENCE" | "LATE";
-      }> = [];
-
-      // Collect makeups (students transferring TO this date's lessons)
-      const makeups: Array<{
-        childName: string;
-        courseLabel: string;
-        classBand: string;
-        startTime: string;
-      }> = [];
-
-      for (const slot of slots) {
-        // Get absences for this slot
-        const slotAbsences = await storage.getAbsencesByOriginalSlotId(slot.id);
-        for (const absence of slotAbsences) {
-          absentees.push({
-            childName: absence.childName,
-            courseLabel: slot.courseLabel,
-            classBand: slot.classBand,
-            startTime: slot.startTime,
-            reportType: absence.reportType as "ABSENCE" | "LATE",
-          });
-        }
-
-        // Get confirmed makeup requests for this slot
-        const slotMakeups = await storage.getConfirmedRequestsBySlotId(slot.id);
-        for (const request of slotMakeups) {
-          makeups.push({
-            childName: request.childName,
-            courseLabel: slot.courseLabel,
-            classBand: slot.classBand,
-            startTime: slot.startTime,
-          });
-        }
-      }
-
-      const trialParticipantsForDate = await storage.getTrialParticipantsByDate(targetDate);
-      const dailyTrialParticipants = trialParticipantsForDate.map((participant) => ({
-        id: participant.id,
-        participantName: participant.participantName,
-        grade: participant.grade,
-        swimLevel: participant.swimLevel,
-        slotId: participant.slotId,
-        courseLabel: participant.courseLabel,
-        classBand: participant.classBand,
-        startTime: participant.startTime,
-      }));
-
-      // Sort by startTime, then by name
-      const sortFn = (a: any, b: any) => {
-        const timeCompare = a.startTime.localeCompare(b.startTime);
-        if (timeCompare !== 0) return timeCompare;
-        return a.childName.localeCompare(b.childName);
-      };
-
-      absentees.sort(sortFn);
-      makeups.sort(sortFn);
-      dailyTrialParticipants.sort((a, b) => {
-        const timeCompare = a.startTime.localeCompare(b.startTime);
-        if (timeCompare !== 0) return timeCompare;
-        return a.participantName.localeCompare(b.participantName, "ja");
-      });
-
-      res.json({
-        date: formatJstDate(targetDate),
-        absentees,
-        makeups,
-        trialParticipants: dailyTrialParticipants,
-      });
+      const targetDate = resolveDailyStatusDate(req.query.date);
+      res.json(await getDailyStatusForDate(targetDate));
     } catch (error: any) {
+      if (error.message === "DAILY_STATUS_DATE_INVALID") {
+        return res.status(400).json({ error: "dateはYYYY-MM-DD形式の有効な日付で指定してください" });
+      }
       console.error("Daily status error:", error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Coach: read-only daily status projection without course, slot, or private fields.
+  app.get("/api/coach/daily-status", requireCoach, async (req, res) => {
+    try {
+      const targetDate = resolveDailyStatusDate(req.query.date);
+      const dailyStatus = await getDailyStatusForDate(targetDate);
+
+      res.json({
+        date: dailyStatus.date,
+        absentees: dailyStatus.absentees.map(({ childName, classBand, startTime, reportType }) => ({
+          childName,
+          classBand,
+          startTime,
+          reportType,
+        })),
+        makeups: dailyStatus.makeups.map(({ childName, classBand, startTime }) => ({
+          childName,
+          classBand,
+          startTime,
+        })),
+        trialParticipants: dailyStatus.trialParticipants.map(({ participantName, grade, swimLevel, classBand, startTime }) => ({
+          participantName,
+          grade,
+          swimLevel,
+          classBand,
+          startTime,
+        })),
+      });
+    } catch (error: any) {
+      if (error.message === "DAILY_STATUS_DATE_INVALID") {
+        return res.status(400).json({ error: "dateはYYYY-MM-DD形式の有効な日付で指定してください" });
+      }
+      console.error("Coach daily status error:", error);
+      res.status(500).json({ error: "日別状況の取得に失敗しました" });
     }
   });
 
@@ -1978,6 +2438,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const endRange = endOfJstDay(addJstDays(absentDate, makeupWindowDays));
 
       const allSlots = await storage.getClassSlotsByDateRange(startRange, endRange);
+      const trialParticipantCounts = await storage.getTrialParticipantCountsBySlotIds(
+        allSlots.map((slot) => slot.id),
+      );
       const now = new Date();
 
       const slots = allSlots.filter((slot) =>
@@ -1985,8 +2448,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       const results = slots.map(slot => {
-        const remainingSlots = getRemainingCapacity(slot);
-        const actualCurrent = getActualCurrent(slot);
+        const slotWithTrials = withTrialParticipantCount(
+          slot,
+          trialParticipantCounts[slot.id] || 0,
+        );
+        const remainingSlots = getRemainingCapacity(slotWithTrials);
+        const actualCurrent = getActualCurrent(slotWithTrials);
         let statusCode: "〇" | "△" | "×";
         let statusText: string;
 
@@ -2013,6 +2480,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           capacityLimit: slot.capacityLimit,
           capacityCurrent: slot.capacityCurrent,
           capacityMakeupUsed: slot.capacityMakeupUsed || 0,
+          trialParticipantCount: slotWithTrials.trialParticipantCount,
           actualCurrent,
         };
       });
@@ -2023,200 +2491,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/admin/book", requireAdmin, async (req, res) => {
+    return handleMakeupBooking(req, res, {
+      allowOverCapacity: true,
+      requireAbsence: false,
+    });
+  });
+
   app.post("/api/book", async (req, res) => {
-    try {
-      const data = bookRequestSchema.parse(req.body);
-
-      const now = new Date();
-      const cancelToken = createId();
-      const requestId = createId();
-      const bookingResult = await db.transaction(async (tx) => {
-        const slotRef = await resolveSlotReference(tx, data.toSlotId);
-        const slot = slotRef?.slot;
-        if (!slotRef || !slot) {
-          throw new Error("BOOK_SLOT_NOT_FOUND");
-        }
-
-        if (slot.classBand !== data.declaredClassBand) {
-          throw new Error("BOOK_CLASS_BAND_MISMATCH");
-        }
-
-        if (slot.isClosed) {
-          throw new Error("BOOK_SLOT_CLOSED");
-        }
-
-        const slotStartDateTime = getCanonicalSlotStartDateTime(slot);
-        if (isSlotStarted(slot, now)) {
-          throw new Error("BOOK_SLOT_STARTED");
-        }
-
-        if (!hasRemainingCapacity(slot, 1)) {
-          throw new Error("BOOK_SLOT_FULL");
-        }
-
-        const duplicateRequest = await tx.select({ id: requests.id }).from(requests).where(and(
-          eq(requests.status, "確定"),
-          eq(requests.childName, data.childName),
-          eq(requests.toSlotStartDateTime, slotStartDateTime),
-        ));
-        if (duplicateRequest.length > 0) {
-          throw new Error("BOOK_DUPLICATE_CHILD");
-        }
-
-        let confirmCode: string | null = null;
-        let txContactEmail: string | null = null;
-        let claimedAbsenceId: string | null = null;
-        if (data.absenceId) {
-          const [absence] = await tx.select().from(absences).where(eq(absences.id, data.absenceId));
-          if (!absence) {
-            throw new Error("BOOK_ABSENCE_NOT_FOUND");
-          }
-          if (isAbsenceCancelledStatus(absence.makeupStatus)) {
-            throw new Error("BOOK_ABSENCE_CANCELLED");
-          }
-          if (absence.reportType === "LATE") {
-            throw new Error("BOOK_LATE_NOT_BOOKABLE");
-          }
-          if (absence.makeupStatus !== "PENDING") {
-            throw new Error("BOOK_ABSENCE_NOT_PENDING");
-          }
-          if (isDeadlineExpired(absence.makeupDeadline, now)) {
-            throw new Error("BOOK_ABSENCE_DEADLINE");
-          }
-
-          const alreadyConfirmed = await tx.select().from(requests).where(and(
-            eq(requests.absenceId, absence.id),
-            eq(requests.status, "確定"),
-          ));
-          if (alreadyConfirmed.length > 0) {
-            throw new Error("BOOK_ABSENCE_ALREADY_CONFIRMED");
-          }
-
-          const [claimedAbsence] = await tx
-            .update(absences)
-            .set({
-              makeupStatus: "MAKEUP_CONFIRMED",
-              updatedAt: new Date(),
-            })
-            .where(and(
-              eq(absences.id, absence.id),
-              eq(absences.makeupStatus, "PENDING"),
-            ))
-            .returning();
-          if (!claimedAbsence) {
-            throw new Error("BOOK_ABSENCE_NOT_PENDING");
-          }
-
-          claimedAbsenceId = claimedAbsence.id;
-          txContactEmail = claimedAbsence.contactEmail;
-          confirmCode = claimedAbsence.confirmCode;
-        }
-
-        const [updatedSlot] = await tx
-          .update(classSlots)
-          .set({
-            capacityMakeupUsed: sql`${classSlots.capacityMakeupUsed} + 1`,
-            updatedAt: new Date(),
-          })
-          .where(and(
-            eq(classSlots.id, slotRef.canonicalSlotId),
-            sql`${classSlots.capacityLimit} - ${classSlots.capacityCurrent} - ${classSlots.capacityMakeupUsed} >= 1`,
-          ))
-          .returning();
-        if (!updatedSlot) {
-          throw new Error("BOOK_SLOT_FULL");
-        }
-
-        const [request] = await tx.insert(requests).values({
-          id: requestId,
-          userId: null,
-          childId: data.childId || null,
-          absenceId: claimedAbsenceId || data.absenceId || null,
-          childName: data.childName,
-          declaredClassBand: data.declaredClassBand,
-          absentDate: parseJstDate(data.absentDateISO),
-          toSlotId: slotRef.canonicalSlotId,
-          status: "確定",
-          contactEmail: txContactEmail,
-          confirmToken: null,
-          declineToken: null,
-          cancelToken,
-          confirmCode,
-          toSlotStartDateTime: slotStartDateTime,
-        }).returning();
-
-        return {
-          contactEmail: txContactEmail,
-          slotForEmail: {
-            courseLabel: updatedSlot.courseLabel,
-            date: updatedSlot.date,
-            startTime: updatedSlot.startTime,
-            classBand: updatedSlot.classBand,
-          },
-          requestIdForEmail: request.id,
-        };
-      });
-
-      if (bookingResult.contactEmail) {
-        try {
-          await sendMakeupConfirmationEmail(
-            bookingResult.contactEmail,
-            data.childName,
-            bookingResult.slotForEmail.courseLabel,
-            format(bookingResult.slotForEmail.date, "yyyy年M月d日(E)", { locale: ja }),
-            bookingResult.slotForEmail.startTime,
-            bookingResult.slotForEmail.classBand,
-            bookingResult.requestIdForEmail,
-            cancelToken,
-          );
-        } catch (error: any) {
-          console.error("振替確定メール送信エラー:", error.message);
-        }
-      }
-
-      res.json({ success: true, status: "確定", message: "振替予約が成立しました。" });
-    } catch (error: any) {
-      if (error.message === "BOOK_SLOT_NOT_FOUND") {
-        return res.status(404).json({ success: false, message: "指定された枠が見つかりません。" });
-      }
-      if (error.message === "BOOK_CLASS_BAND_MISMATCH") {
-        return res.status(400).json({ success: false, message: "クラス帯が一致しません。" });
-      }
-      if (error.message === "BOOK_SLOT_STARTED") {
-        return res.status(400).json({ success: false, message: "この枠は開始時刻を過ぎているため予約できません。" });
-      }
-      if (error.message === "BOOK_SLOT_FULL") {
-        return res.status(400).json({ success: false, message: "この枠は満席のため予約できません。" });
-      }
-      if (error.message === "BOOK_SLOT_CLOSED") {
-        return res.status(400).json({ success: false, message: "この枠は休講のため予約できません。" });
-      }
-      if (error.message === "BOOK_DUPLICATE_CHILD") {
-        return res.status(400).json({
-          success: false,
-          message: "同じお子様は既にこの枠に登録済みです。重複して登録することはできません。",
-        });
-      }
-      if (error.message === "BOOK_ABSENCE_NOT_FOUND") {
-        return res.status(400).json({ success: false, message: "欠席情報が見つかりません。" });
-      }
-      if (error.message === "BOOK_ABSENCE_CANCELLED") {
-        return res.status(400).json({ success: false, message: "キャンセル済みの欠席連絡では予約できません。" });
-      }
-      if (error.message === "BOOK_LATE_NOT_BOOKABLE") {
-        return res.status(400).json({ success: false, message: "遅刻連絡では振替予約できません。" });
-      }
-      if (error.message === "BOOK_ABSENCE_NOT_PENDING") {
-        return res.status(400).json({ success: false, message: "この欠席連絡は現在予約可能な状態ではありません。" });
-      }
-      if (error.message === "BOOK_ABSENCE_DEADLINE") {
-        return res.status(400).json({ success: false, message: "振替期限が過ぎているため予約できません。" });
-      }
-      if (error.message === "BOOK_ABSENCE_ALREADY_CONFIRMED") {
-        return res.status(400).json({ success: false, message: "この欠席連絡は既に振替予約が確定しています。" });
-      }
-      res.status(400).json({ error: error.message });
-    }
+    return handleMakeupBooking(req, res, {
+      allowOverCapacity: false,
+      requireAbsence: true,
+    });
   });
 
 
@@ -2621,7 +2907,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/admin/slots", requireAdmin, async (req, res) => {
     try {
       const slots = await db.select().from(classSlots).orderBy(asc(classSlots.date), asc(classSlots.startTime));
-      res.json(slots);
+      const trialParticipantCounts = await storage.getTrialParticipantCountsBySlotIds(
+        slots.map((slot) => slot.id),
+      );
+      res.json(slots.map((slot) => withTrialParticipantCount(
+        slot,
+        trialParticipantCounts[slot.id] || 0,
+      )));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

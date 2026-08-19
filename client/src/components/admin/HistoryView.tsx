@@ -135,7 +135,7 @@ export function HistoryView() {
                 throw new Error("クラス帯が不正なため、振替登録できません。");
             }
 
-            return apiRequest("POST", "/api/book", {
+            return apiRequest("POST", "/api/admin/book", {
                 absenceId: absence.id,
                 childName: absence.childName,
                 declaredClassBand: absence.declaredClassBand,
@@ -177,7 +177,7 @@ export function HistoryView() {
             absentDateISO: string;
             toSlotId: string;
         }) => {
-            return apiRequest("POST", "/api/book", {
+            return apiRequest("POST", "/api/admin/book", {
                 childName: params.childName,
                 declaredClassBand: params.declaredClassBand,
                 absentDateISO: params.absentDateISO,
@@ -261,7 +261,7 @@ export function HistoryView() {
             }) as SlotSearchResult[];
 
             setBookingCandidates(candidates);
-            const firstAvailable = candidates.find((slot) => slot.statusCode !== "×");
+            const firstAvailable = candidates.find((slot) => slot.statusCode !== "×") || candidates[0];
             if (firstAvailable) {
                 setSelectedBookingSlotId(firstAvailable.slotId);
             }
@@ -333,7 +333,7 @@ export function HistoryView() {
             }) as SlotSearchResult[];
 
             setDirectCandidates(candidates);
-            const firstAvailable = candidates.find((slot) => slot.statusCode !== "×");
+            const firstAvailable = candidates.find((slot) => slot.statusCode !== "×") || candidates[0];
             if (firstAvailable) {
                 setSelectedDirectSlotId(firstAvailable.slotId);
             }
@@ -673,7 +673,7 @@ export function HistoryView() {
                     <DialogHeader>
                         <DialogTitle>管理者による振替登録</DialogTitle>
                         <DialogDescription>
-                            欠席者の振替先を選択して確定します。
+                            欠席者の振替先を選択して確定します。満員の枠も管理者登録できます。
                         </DialogDescription>
                     </DialogHeader>
 
@@ -694,18 +694,18 @@ export function HistoryView() {
                             ) : (
                                 <div className="space-y-2">
                                     {bookingCandidates.map((slot) => {
-                                        const isSelectable = slot.statusCode !== "×";
+                                        const isOverCapacity = slot.statusCode === "×";
                                         const isSelected = selectedBookingSlotId === slot.slotId;
                                         return (
                                             <button
                                                 key={slot.slotId}
                                                 type="button"
-                                                disabled={!isSelectable || bookFromAbsenceMutation.isPending}
+                                                disabled={bookFromAbsenceMutation.isPending}
                                                 onClick={() => setSelectedBookingSlotId(slot.slotId)}
                                                 className={`w-full rounded-lg border p-3 text-left transition-colors ${isSelected
                                                     ? "border-primary bg-primary/5"
                                                     : "border-border hover:border-primary/50"
-                                                    } ${!isSelectable ? "opacity-60 cursor-not-allowed" : ""}`}
+                                                    } ${isOverCapacity ? "border-amber-300 bg-amber-50/50" : ""}`}
                                             >
                                                 <div className="flex items-center justify-between gap-3">
                                                     <div>
@@ -713,7 +713,7 @@ export function HistoryView() {
                                                             {format(parseJstDate(slot.date), "M/d(E)", { locale: ja })} {slot.startTime} - {slot.courseLabel}
                                                         </p>
                                                         <p className="text-xs text-muted-foreground mt-1">
-                                                            {slot.classBand} / {slot.statusText}
+                                                            {slot.classBand} / {isOverCapacity ? "満員（管理者登録可）" : slot.statusText}
                                                         </p>
                                                     </div>
                                                     <div className="flex items-center gap-2">
@@ -765,7 +765,7 @@ export function HistoryView() {
                     <DialogHeader>
                         <DialogTitle>欠席連絡なしで振替登録</DialogTitle>
                         <DialogDescription>
-                            欠席連絡が未登録でも、管理者が直接振替予約を登録できます。
+                            欠席連絡が未登録でも、管理者が直接振替予約を登録できます。満員の枠も登録可能です。
                         </DialogDescription>
                     </DialogHeader>
 
@@ -832,18 +832,18 @@ export function HistoryView() {
                         ) : (
                             <div className="space-y-2">
                                 {directCandidates.map((slot) => {
-                                    const isSelectable = slot.statusCode !== "×";
+                                    const isOverCapacity = slot.statusCode === "×";
                                     const isSelected = selectedDirectSlotId === slot.slotId;
                                     return (
                                         <button
                                             key={slot.slotId}
                                             type="button"
-                                            disabled={!isSelectable || bookWithoutAbsenceMutation.isPending}
+                                            disabled={bookWithoutAbsenceMutation.isPending}
                                             onClick={() => setSelectedDirectSlotId(slot.slotId)}
                                             className={`w-full rounded-lg border p-3 text-left transition-colors ${isSelected
                                                 ? "border-primary bg-primary/5"
                                                 : "border-border hover:border-primary/50"
-                                                } ${!isSelectable ? "opacity-60 cursor-not-allowed" : ""}`}
+                                                } ${isOverCapacity ? "border-amber-300 bg-amber-50/50" : ""}`}
                                             data-testid={`button-direct-booking-slot-${slot.slotId}`}
                                         >
                                             <div className="flex items-center justify-between gap-3">
@@ -852,7 +852,7 @@ export function HistoryView() {
                                                         {format(parseJstDate(slot.date), "M/d(E)", { locale: ja })} {slot.startTime} - {slot.courseLabel}
                                                     </p>
                                                     <p className="text-xs text-muted-foreground mt-1">
-                                                        {slot.classBand} / {slot.statusText}
+                                                        {slot.classBand} / {isOverCapacity ? "満員（管理者登録可）" : slot.statusText}
                                                     </p>
                                                 </div>
                                                 <div className="flex items-center gap-2">

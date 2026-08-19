@@ -1,6 +1,8 @@
-import type { ClassSlot, Course } from "@shared/schema";
+import type { ClassSlotWithTrialParticipantCount, Course } from "@shared/schema";
 
-export type LessonWithStatus = ClassSlot & {
+export type StaffRole = "admin" | "coach";
+
+export type LessonWithStatus = ClassSlotWithTrialParticipantCount & {
     absenceCount: number;
     makeupCount: number;
 };
@@ -22,7 +24,7 @@ export type LessonStatusMakeupRequest = {
 };
 
 export type LessonStatus = {
-    slot: ClassSlot;
+    slot: ClassSlotWithTrialParticipantCount;
     absences: LessonStatusAbsence[];
     makeupRequests: LessonStatusMakeupRequest[];
 };
@@ -68,7 +70,7 @@ export type CourseDialogProps = {
 };
 
 export type SlotDialogProps = {
-    slot: ClassSlot | null;
+    slot: ClassSlotWithTrialParticipantCount | null;
     open: boolean;
     onOpenChange: (open: boolean) => void;
     onSave: (data: any) => void;

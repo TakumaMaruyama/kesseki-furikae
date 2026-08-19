@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import StatusPage from "@/pages/status";
 import ParentPage from "@/pages/parent";
 import AdminPage from "@/pages/admin";
+import CoachPage from "@/pages/coach";
 import CancelAbsencePage from "@/pages/cancel-absence";
 import CancelAbsenceTokenPage from "@/pages/cancel-absence-token";
 import CancelRequestPage from "@/pages/cancel-request";
@@ -31,10 +32,11 @@ function MainRouter() {
   );
 }
 
-function AdminRouter() {
+function StaffRouter() {
   return (
     <Switch>
       <Route path="/admin" component={AdminPage} />
+      <Route path="/coach" component={CoachPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -43,6 +45,7 @@ function AdminRouter() {
 function AppContent() {
   const [location] = useLocation();
   const isAdmin = location === "/admin";
+  const isStaff = isAdmin || location === "/coach";
   const isStatus = location === "/status";
 
   useEffect(() => {
@@ -94,8 +97,8 @@ function AppContent() {
 
   return (
     <>
-      {isAdmin ? <AdminRouter /> : <MainRouter />}
-      <FloatingActionButtons isAdmin={isAdmin} isStatus={isStatus} />
+      {isStaff ? <StaffRouter /> : <MainRouter />}
+      <FloatingActionButtons isAdmin={isAdmin} isStaff={isStaff} isStatus={isStatus} />
     </>
   );
 }

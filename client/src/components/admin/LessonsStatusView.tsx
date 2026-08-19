@@ -136,11 +136,11 @@ export function LessonsStatusView() {
                                                 <p className="font-semibold">{lessonStatus.slot.capacityLimit}</p>
                                             </div>
                                             <div>
-                                                <p className="text-xs text-muted-foreground">現在</p>
+                                                <p className="text-xs text-muted-foreground">現在（体験者含む）</p>
                                                 <p className="font-semibold">{getActualCurrent(lessonStatus.slot)}</p>
                                             </div>
                                             <div>
-                                                <p className="text-xs text-muted-foreground">残り枠（自動計算）</p>
+                                                <p className="text-xs text-muted-foreground">残り枠（体験者含む）</p>
                                                 <p className="font-semibold">{getRemainingCapacity(lessonStatus.slot)}</p>
                                             </div>
                                         </div>

@@ -1490,11 +1490,13 @@ function SlotCard({ slot, onBook, absenceId }: SlotCardProps) {
     capacityLimit: slot.capacityLimit,
     capacityCurrent: slot.capacityCurrent,
     capacityMakeupUsed: slot.capacityMakeupUsed,
+    trialParticipantCount: slot.trialParticipantCount,
   });
   const actualRemainingSlots = slot.remainingSlots ?? getRemainingCapacity({
     capacityLimit: slot.capacityLimit,
     capacityCurrent: slot.capacityCurrent,
     capacityMakeupUsed: slot.capacityMakeupUsed,
+    trialParticipantCount: slot.trialParticipantCount,
   });
 
   return (
@@ -1542,11 +1544,11 @@ function SlotCard({ slot, onBook, absenceId }: SlotCardProps) {
             <p className="font-semibold">{slot.capacityLimit || 0}</p>
           </div>
           <div className="text-center p-2 bg-background rounded border">
-            <p className="text-muted-foreground text-xs">現在</p>
+            <p className="text-muted-foreground text-xs">現在（体験者含む）</p>
             <p className="font-semibold">{actualCurrent}</p>
           </div>
           <div className="text-center p-2 bg-background rounded border">
-            <p className="text-muted-foreground text-xs">振替枠</p>
+            <p className="text-muted-foreground text-xs">振替枠（体験者含む）</p>
             <p className="font-semibold">{actualRemainingSlots}</p>
           </div>
         </div>

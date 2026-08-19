@@ -9,30 +9,36 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { LockIcon, Loader2 } from "lucide-react";
+import type { StaffRole } from "./types";
 
-const adminLoginSchema = z.object({
+const staffLoginSchema = z.object({
+    loginId: z.string().min(1, "ログインIDを入力してください"),
     password: z.string().min(1, "パスワードを入力してください"),
 });
 
 type AdminLoginFormProps = {
-    onSuccess: () => void;
+    onSuccess: (role: StaffRole) => void;
 };
+
+type StaffLoginFormValues = z.infer<typeof staffLoginSchema>;
 
 export function AdminLoginForm({ onSuccess }: AdminLoginFormProps) {
     const { toast } = useToast();
     const [isLoading, setIsLoading] = useState(false);
 
-    const form = useForm({
-        resolver: zodResolver(adminLoginSchema),
-        defaultValues: { password: "" },
+    const form = useForm<StaffLoginFormValues>({
+        resolver: zodResolver(staffLoginSchema),
+        defaultValues: { loginId: "admin", password: "" },
     });
 
-    const onSubmit = async (data: { password: string }) => {
+    const onSubmit = async (data: StaffLoginFormValues) => {
         setIsLoading(true);
         try {
             const response = await apiRequest("POST", "/api/admin/login", data);
-            if (response.success) {
-                onSuccess();
+            if (response.success && (response.role === "admin" || response.role === "coach")) {
+                onSuccess(response.role);
+            } else {
+                throw new Error("認証情報が正しくありません");
             }
         } catch (error: any) {
             toast({
@@ -52,14 +58,33 @@ export function AdminLoginForm({ onSuccess }: AdminLoginFormProps) {
                     <div className="mx-auto mb-4 w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center">
                         <LockIcon className="w-6 h-6 text-primary" />
                     </div>
-                    <CardTitle className="text-2xl">管理者ログイン</CardTitle>
+                    <CardTitle className="text-2xl">スタッフログイン</CardTitle>
                     <p className="text-sm text-muted-foreground mt-2">
-                        管理画面にアクセスするにはパスワードを入力してください
+                        管理者またはコーチのログインIDとパスワードを入力してください
                     </p>
                 </CardHeader>
                 <CardContent>
                     <Form {...form}>
                         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                            <FormField
+                                control={form.control}
+                                name="loginId"
+                                render={({ field }) => (
+                                    <FormItem>
+                                        <FormLabel>ログインID</FormLabel>
+                                        <FormControl>
+                                            <Input
+                                                {...field}
+                                                type="text"
+                                                autoComplete="username"
+                                                placeholder="admin"
+                                                data-testid="input-staff-login-id"
+                                            />
+                                        </FormControl>
+                                        <FormMessage />
+                                    </FormItem>
+                                )}
+                            />
                             <FormField
                                 control={form.control}
                                 name="password"
@@ -70,7 +95,8 @@ export function AdminLoginForm({ onSuccess }: AdminLoginFormProps) {
                                             <Input
                                                 {...field}
                                                 type="password"
-                                                placeholder="管理者パスワード"
+                                                autoComplete="current-password"
+                                                placeholder="パスワード"
                                                 data-testid="input-admin-password"
                                             />
                                         </FormControl>

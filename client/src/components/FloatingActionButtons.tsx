@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 
 type FloatingActionButtonsProps = {
   isAdmin: boolean;
+  isStaff: boolean;
   isStatus: boolean;
 };
 
@@ -13,6 +14,7 @@ const floatingContainerStyle = {
 
 export default function FloatingActionButtons({
   isAdmin,
+  isStaff,
   isStatus,
 }: FloatingActionButtonsProps) {
   return (
@@ -41,7 +43,7 @@ export default function FloatingActionButtons({
             保護者向け画面
           </Button>
         </Link>
-      ) : (
+      ) : isStaff ? null : (
         <>
           {!isStatus && (
             <Link href="/status">

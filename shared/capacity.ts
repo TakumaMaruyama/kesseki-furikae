@@ -4,6 +4,7 @@ export type SlotCapacityLike = {
   capacityLimit: Numeric;
   capacityCurrent: Numeric;
   capacityMakeupUsed: Numeric;
+  trialParticipantCount?: Numeric;
 };
 
 function toSafeInt(value: Numeric): number {
@@ -25,8 +26,16 @@ export function getMakeupUsed(slot: SlotCapacityLike): number {
   return Math.max(0, toSafeInt(slot.capacityMakeupUsed));
 }
 
+export function getTrialParticipantCount(slot: SlotCapacityLike): number {
+  return Math.max(0, toSafeInt(slot.trialParticipantCount));
+}
+
 export function getActualCurrent(slot: SlotCapacityLike): number {
-  return getBaseCurrent(slot) + getMakeupUsed(slot);
+  return getBaseCurrent(slot) + getMakeupUsed(slot) + getTrialParticipantCount(slot);
+}
+
+export function getMakeupCapacityLimit(slot: SlotCapacityLike): number {
+  return Math.max(0, getCapacityLimit(slot) - getBaseCurrent(slot) - getTrialParticipantCount(slot));
 }
 
 export function getRemainingCapacity(slot: SlotCapacityLike): number {
@@ -36,4 +45,3 @@ export function getRemainingCapacity(slot: SlotCapacityLike): number {
 export function hasRemainingCapacity(slot: SlotCapacityLike, required = 1): boolean {
   return getRemainingCapacity(slot) >= required;
 }
-

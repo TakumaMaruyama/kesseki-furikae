@@ -143,6 +143,9 @@ export const insertClassSlotSchema = createInsertSchema(classSlots).omit({
 });
 export type InsertClassSlot = z.infer<typeof insertClassSlotSchema>;
 export type ClassSlot = typeof classSlots.$inferSelect;
+export type ClassSlotWithTrialParticipantCount = ClassSlot & {
+  trialParticipantCount: number;
+};
 
 export const slotIdAliases = pgTable("slot_id_aliases", {
   legacySlotId: varchar("legacy_slot_id").primaryKey(),
@@ -316,6 +319,17 @@ export const adminCredentials = pgTable("admin_credentials", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// Shared coach credentials for read-only daily status access
+export const coachCredentials = pgTable("coach_credentials", {
+  id: integer("id").primaryKey().default(1),
+  loginId: varchar("login_id").notNull().unique(),
+  passwordHash: varchar("password_hash").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type CoachCredential = typeof coachCredentials.$inferSelect;
 
 // Zod schemas for API validation
 export const globalSettingsSchema = z.object({
@@ -628,5 +642,6 @@ export type SlotSearchResult = {
   capacityLimit?: number;
   capacityCurrent?: number;
   capacityMakeupUsed?: number;
+  trialParticipantCount?: number;
   actualCurrent?: number;
 };

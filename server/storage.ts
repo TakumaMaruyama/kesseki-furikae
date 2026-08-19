@@ -9,6 +9,7 @@ import {
   holidays,
   globalSettings,
   adminCredentials,
+  coachCredentials,
   type User,
   type UpsertUser,
   type Child,
@@ -26,6 +27,7 @@ import {
   type Holiday,
   type InsertHoliday,
   type GlobalSettings,
+  type CoachCredential,
 } from "@shared/schema";
 import { addJstDays, endOfJstDay, startOfJstDay } from "@shared/jst";
 import { isSlotStarted } from "@shared/slotDateTime";
@@ -114,6 +116,7 @@ export interface IStorage {
 
   // Trial participant operations
   getTrialParticipantsByDate(date: Date): Promise<TrialParticipantWithSlot[]>;
+  getTrialParticipantCountsBySlotIds(slotIds: string[]): Promise<Record<string, number>>;
   getTrialParticipantById(id: string): Promise<TrialParticipant | undefined>;
   createTrialParticipant(data: InsertTrialParticipant): Promise<TrialParticipant>;
   updateTrialParticipant(id: string, data: Partial<InsertTrialParticipant>): Promise<TrialParticipant | undefined>;
@@ -132,6 +135,8 @@ export interface IStorage {
   // Admin credentials
   getAdminPasswordHash(): Promise<string | undefined>;
   setAdminPasswordHash(hash: string): Promise<void>;
+  getCoachCredential(): Promise<CoachCredential | undefined>;
+  upsertCoachCredential(loginId: string, passwordHash: string): Promise<CoachCredential>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -537,6 +542,23 @@ export class DatabaseStorage implements IStorage {
       .orderBy(asc(classSlots.startTime), asc(trialParticipants.participantName), asc(trialParticipants.createdAt));
   }
 
+  async getTrialParticipantCountsBySlotIds(slotIds: string[]): Promise<Record<string, number>> {
+    if (slotIds.length === 0) {
+      return {};
+    }
+
+    const rows = await db
+      .select({
+        slotId: trialParticipants.slotId,
+        count: sql<number>`count(*)`,
+      })
+      .from(trialParticipants)
+      .where(inArray(trialParticipants.slotId, slotIds))
+      .groupBy(trialParticipants.slotId);
+
+    return Object.fromEntries(rows.map((row) => [row.slotId, Number(row.count)]));
+  }
+
   async getTrialParticipantById(id: string): Promise<TrialParticipant | undefined> {
     const [participant] = await db.select().from(trialParticipants).where(eq(trialParticipants.id, id));
     return participant;
@@ -627,6 +649,33 @@ export class DatabaseStorage implements IStorage {
     } else {
       await db.update(adminCredentials).set({ passwordHash: hash, updatedAt: new Date() }).where(eq(adminCredentials.id, 1));
     }
+  }
+
+  // Shared coach credentials
+  async getCoachCredential(): Promise<CoachCredential | undefined> {
+    const [credential] = await db
+      .select()
+      .from(coachCredentials)
+      .where(eq(coachCredentials.id, 1));
+    return credential;
+  }
+
+  async upsertCoachCredential(loginId: string, passwordHash: string): Promise<CoachCredential> {
+    const existing = await this.getCoachCredential();
+    if (!existing) {
+      const [credential] = await db
+        .insert(coachCredentials)
+        .values({ id: 1, loginId, passwordHash })
+        .returning();
+      return credential;
+    }
+
+    const [credential] = await db
+      .update(coachCredentials)
+      .set({ loginId, passwordHash, updatedAt: new Date() })
+      .where(eq(coachCredentials.id, 1))
+      .returning();
+    return credential;
   }
 }
 
