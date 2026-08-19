@@ -46,7 +46,20 @@ type CoachStatusItem = {
   startTime: string;
   detail?: string;
   badge?: string;
+  badgeClassName?: string;
 };
+
+type StatusSectionColors = {
+  cardClassName: string;
+  timeClassName: string;
+  itemClassName: string;
+};
+
+function getReportTypeBadgeStyle(reportType: "ABSENCE" | "LATE"): string {
+  return reportType === "LATE"
+    ? "bg-amber-100 text-amber-800 border-amber-200"
+    : "bg-red-100 text-red-700 border-red-200";
+}
 
 function groupByStartTime(items: CoachStatusItem[]): Array<{ startTime: string; items: CoachStatusItem[] }> {
   const grouped = new Map<string, CoachStatusItem[]>();
@@ -67,17 +80,19 @@ function StatusSection({
   items,
   icon,
   accentClassName,
+  colors,
 }: {
   title: string;
   emptyMessage: string;
   items: CoachStatusItem[];
   icon: React.ReactNode;
   accentClassName: string;
+  colors: StatusSectionColors;
 }) {
   const groups = useMemo(() => groupByStartTime(items), [items]);
 
   return (
-    <Card className="border-2">
+    <Card className={`border-2 ${colors.cardClassName}`}>
       <CardHeader className="p-6 pb-4">
         <CardTitle className={`flex items-center gap-2 text-lg ${accentClassName}`}>
           {icon}
@@ -91,23 +106,35 @@ function StatusSection({
           <div className="space-y-4">
             {groups.map((group) => (
               <div key={group.startTime} className="space-y-2">
-                <p className="text-sm font-semibold text-muted-foreground">{group.startTime}</p>
-                <div className="space-y-2">
-                  {group.items.map((item, index) => (
-                    <div
-                      key={`${group.startTime}-${item.name}-${index}`}
-                      className="flex items-center justify-between gap-3 rounded-lg border p-3"
-                    >
-                      <div className="min-w-0">
-                        <p className="font-medium">{item.name}</p>
-                        {item.detail && <p className="text-xs text-muted-foreground">{item.detail}</p>}
+                <div className="overflow-hidden rounded-lg border-2">
+                  <div className={`border-b px-3 py-2 ${colors.timeClassName}`}>
+                    <p className="text-sm font-semibold">{group.startTime}</p>
+                  </div>
+                  <div className="divide-y">
+                    {group.items.map((item, index) => (
+                      <div
+                        key={`${group.startTime}-${item.name}-${index}`}
+                        className={`flex items-center justify-between gap-3 p-3 ${colors.itemClassName}`}
+                      >
+                        <div className="min-w-0">
+                          <p className="font-medium">{item.name}</p>
+                          {item.detail && <p className="text-xs text-muted-foreground">{item.detail}</p>}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Badge variant="outline">{item.classBand}</Badge>
+                          {item.badge && (
+                            <span
+                              className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium ${
+                                item.badgeClassName ?? "bg-muted text-muted-foreground border-border"
+                              }`}
+                            >
+                              {item.badge}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <Badge variant="outline">{item.classBand}</Badge>
-                        {item.badge && <Badge variant="secondary">{item.badge}</Badge>}
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               </div>
             ))}
@@ -185,6 +212,7 @@ export default function CoachPage() {
     classBand: item.classBand,
     startTime: item.startTime,
     badge: item.reportType === "LATE" ? "遅刻" : "欠席",
+    badgeClassName: getReportTypeBadgeStyle(item.reportType),
   }));
   const makeupItems: CoachStatusItem[] = (data?.makeups ?? []).map((item) => ({
     name: item.childName,
@@ -253,6 +281,11 @@ export default function CoachPage() {
               items={absenceItems}
               icon={<UserXIcon className="h-5 w-5" />}
               accentClassName="text-destructive"
+              colors={{
+                cardClassName: "border-destructive/30",
+                timeClassName: "bg-destructive/10",
+                itemClassName: "bg-destructive/5",
+              }}
             />
             <StatusSection
               title="振替者"
@@ -260,6 +293,11 @@ export default function CoachPage() {
               items={makeupItems}
               icon={<UserCheckIcon className="h-5 w-5" />}
               accentClassName="text-primary"
+              colors={{
+                cardClassName: "border-primary/30",
+                timeClassName: "bg-primary/10",
+                itemClassName: "bg-primary/5",
+              }}
             />
             <StatusSection
               title="体験者"
@@ -267,6 +305,11 @@ export default function CoachPage() {
               items={trialItems}
               icon={<UserPlusIcon className="h-5 w-5" />}
               accentClassName="text-emerald-700"
+              colors={{
+                cardClassName: "border-emerald-300/70",
+                timeClassName: "bg-emerald-100/60",
+                itemClassName: "bg-emerald-50/60",
+              }}
             />
           </div>
         )}
