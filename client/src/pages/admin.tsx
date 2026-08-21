@@ -23,7 +23,6 @@ import {
   DailyStatusView,
   HistoryView,
   CoursesManagement,
-  LessonsStatusView,
   SlotDialog,
   CoachAccountSettings,
 } from "@/components/admin";
@@ -578,12 +577,9 @@ export default function AdminPage() {
         </div>
 
         <Tabs defaultValue="daily-status" className="w-full">
-          <TabsList className="grid w-full max-w-5xl grid-cols-5 h-12">
+          <TabsList className="grid w-full max-w-5xl grid-cols-4 h-12">
             <TabsTrigger value="daily-status" data-testid="tab-daily-status" className="text-base">
               本日の状況
-            </TabsTrigger>
-            <TabsTrigger value="lessons" data-testid="tab-lessons" className="text-base">
-              レッスン状況
             </TabsTrigger>
             <TabsTrigger value="slots" data-testid="tab-slots" className="text-base">
               枠管理
@@ -598,10 +594,6 @@ export default function AdminPage() {
 
           <TabsContent value="daily-status" className="mt-6">
             <DailyStatusView />
-          </TabsContent>
-
-          <TabsContent value="lessons" className="mt-6">
-            <LessonsStatusView />
           </TabsContent>
 
           <TabsContent value="history" className="mt-6">

@@ -1559,27 +1559,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/lesson-status", requireAdmin, async (req, res) => {
-    try {
-      const { slotId } = req.query;
-
-      if (!slotId || typeof slotId !== 'string') {
-        return res.status(400).json({ message: "slotIdが必要です" });
-      }
-
-      const result = await getSlotAbsencesAndMakeups(slotId);
-
-      if (!result) {
-        return res.status(404).json({ message: "レッスン枠が見つかりません" });
-      }
-
-      res.json(result);
-    } catch (error: any) {
-      console.error("レッスン状況取得エラー:", error);
-      res.status(500).json({ message: error.message });
-    }
-  });
-
   app.get("/api/admin/daily-lessons", requireAdmin, async (req, res) => {
     try {
       const { date } = req.query;

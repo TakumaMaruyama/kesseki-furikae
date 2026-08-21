@@ -2,33 +2,6 @@ import type { ClassSlotWithTrialParticipantCount, Course } from "@shared/schema"
 
 export type StaffRole = "admin" | "coach";
 
-export type LessonWithStatus = ClassSlotWithTrialParticipantCount & {
-    absenceCount: number;
-    makeupCount: number;
-};
-
-export type LessonStatusAbsence = {
-    id: string;
-    childName: string;
-    contactEmail: string | null;
-    makeupStatus: string;
-    reportType: "ABSENCE" | "LATE";
-    confirmCode: string;
-    reason: string | null;
-};
-
-export type LessonStatusMakeupRequest = {
-    id: string;
-    childName: string;
-    absentDate: string | Date;
-};
-
-export type LessonStatus = {
-    slot: ClassSlotWithTrialParticipantCount;
-    absences: LessonStatusAbsence[];
-    makeupRequests: LessonStatusMakeupRequest[];
-};
-
 export type DashboardStats = {
     todayAbsences: number;
     todayMakeups: number;

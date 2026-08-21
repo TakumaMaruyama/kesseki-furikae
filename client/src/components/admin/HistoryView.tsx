@@ -153,7 +153,6 @@ export function HistoryView() {
             queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard-stats"] });
             queryClient.invalidateQueries({ queryKey: ["/api/admin/daily-status"] });
             queryClient.invalidateQueries({ queryKey: ["/api/admin/daily-lessons"] });
-            queryClient.invalidateQueries({ queryKey: ["/api/admin/lesson-status"] });
             queryClient.invalidateQueries({ queryKey: ["/api/search-slots"] });
 
             setIsBookingDialogOpen(false);
@@ -193,7 +192,6 @@ export function HistoryView() {
             queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard-stats"] });
             queryClient.invalidateQueries({ queryKey: ["/api/admin/daily-status"] });
             queryClient.invalidateQueries({ queryKey: ["/api/admin/daily-lessons"] });
-            queryClient.invalidateQueries({ queryKey: ["/api/admin/lesson-status"] });
             queryClient.invalidateQueries({ queryKey: ["/api/search-slots"] });
 
             setIsDirectBookingDialogOpen(false);
