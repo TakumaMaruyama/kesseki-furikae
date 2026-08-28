@@ -573,6 +573,33 @@ export const updateTrialParticipantRequestSchema = z.object({
   message: "更新項目を指定してください",
 });
 
+export const createNewEnrolleeRequestSchema = z.object({
+  childName: trialParticipantFieldSchema,
+  grade: trialParticipantFieldSchema.optional().or(z.literal("")),
+  classBand: classBandEnum.optional().nullable(),
+  joinedAtISO: z.string().trim().min(1, "入会日を選択してください"),
+  courseId: z.string().trim().min(1, "コースを選択してください"),
+  sourceTrialParticipantId: z.string().trim().optional().nullable(),
+});
+
+export const updateNewEnrolleeRequestSchema = z.object({
+  childName: trialParticipantFieldSchema.optional(),
+  grade: trialParticipantFieldSchema.optional().or(z.literal("")),
+  classBand: classBandEnum.optional().nullable(),
+  joinedAtISO: z.string().trim().min(1, "入会日を選択してください").optional(),
+  courseId: z.string().trim().min(1, "コースを選択してください").optional(),
+  sourceTrialParticipantId: z.string().trim().optional().nullable(),
+}).refine((value) => (
+  value.childName !== undefined ||
+  value.grade !== undefined ||
+  value.classBand !== undefined ||
+  value.joinedAtISO !== undefined ||
+  value.courseId !== undefined ||
+  value.sourceTrialParticipantId !== undefined
+), {
+  message: "更新項目を指定してください",
+});
+
 export const cancelAbsenceRequestSchema = z.object({
   resumeToken: z.string(),
 });
@@ -653,6 +680,8 @@ export type UpdateSlotRequest = z.infer<typeof updateSlotRequestSchema>;
 export type DeleteSlotRequest = z.infer<typeof deleteSlotRequestSchema>;
 export type CreateTrialParticipantRequest = z.infer<typeof createTrialParticipantRequestSchema>;
 export type UpdateTrialParticipantRequest = z.infer<typeof updateTrialParticipantRequestSchema>;
+export type CreateNewEnrolleeRequest = z.infer<typeof createNewEnrolleeRequestSchema>;
+export type UpdateNewEnrolleeRequest = z.infer<typeof updateNewEnrolleeRequestSchema>;
 export type CancelAbsenceRequest = z.infer<typeof cancelAbsenceRequestSchema>;
 export type CancelRequest = z.infer<typeof cancelRequestSchema>;
 export type CreateChildRequest = z.infer<typeof createChildRequestSchema>;

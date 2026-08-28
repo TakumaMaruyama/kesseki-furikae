@@ -176,7 +176,7 @@ export function HistoryView() {
             absentDateISO: string;
             toSlotId: string;
         }) => {
-            return apiRequest("POST", "/api/admin/book", {
+            return apiRequest("POST", "/api/admin/book-without-absence", {
                 childName: params.childName,
                 declaredClassBand: params.declaredClassBand,
                 absentDateISO: params.absentDateISO,

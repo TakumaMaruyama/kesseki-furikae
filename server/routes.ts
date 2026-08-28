@@ -68,7 +68,6 @@ import {
   isValidConfirmCodeFormat,
 } from "./confirmCode";
 import { getAdminAbsenceHistory, getAdminRequestHistory } from "./adminHistory";
-import rateLimit from "express-rate-limit";
 
 // Rate limiters for public low-entropy credential endpoints
 const ADMIN_HISTORY_MONTH_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])$/;
@@ -2587,6 +2586,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/admin/book", requireAdmin, async (req, res) => {
+    return handleMakeupBooking(req, res, {
+      allowOverCapacity: true,
+      requireAbsence: true,
+    });
+  });
+
+  app.post("/api/admin/book-without-absence", requireAdmin, async (req, res) => {
     return handleMakeupBooking(req, res, {
       allowOverCapacity: true,
       requireAbsence: false,

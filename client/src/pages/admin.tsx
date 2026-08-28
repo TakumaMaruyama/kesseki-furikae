@@ -396,8 +396,8 @@ export default function AdminPage() {
     let code = "";
     const array = new Uint8Array(10);
     crypto.getRandomValues(array);
-    for (const byte of array) {
-      code += chars[byte % chars.length];
+    for (let index = 0; index < array.length; index += 1) {
+      code += chars[array[index] % chars.length];
     }
     setClosureSharedCode(code);
   };

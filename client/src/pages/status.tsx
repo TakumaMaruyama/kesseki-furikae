@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 
 function formatSlotDateTimeFromId(slotId: string): string {
   const parsed = parseCanonicalSlotId(slotId);
