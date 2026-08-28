@@ -1,5 +1,6 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
+import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
 import { db } from "./db";
 import { classSlots, absences, requests, trialParticipants, closureEvents, closureEventSlots } from "@shared/schema";
@@ -1229,8 +1230,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })
   );
 
+  // Rate limiter for admin login: max 10 failed attempts per IP per 15 minutes
+  const adminLoginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    message: { error: "ログイン試行が多すぎます。しばらく待ってから再試行してください。" },
+  });
+
   // Shared administrator/coach authentication endpoint
-  app.post("/api/admin/login", async (req, res) => {
+  app.post("/api/admin/login", adminLoginLimiter, async (req, res) => {
     try {
       const rawLoginId = typeof req.body?.loginId === "string" ? req.body.loginId.trim() : "";
       const loginId = rawLoginId || "admin";
@@ -1265,6 +1276,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await saveStaffSession(req, role);
         return res.json({ success: true, role });
       } else {
+        // Fixed delay on failure to slow brute-force attempts within the rate-limit window.
+        await new Promise((resolve) => setTimeout(resolve, 1500));
         return res.status(401).json({ error: "ログインIDまたはパスワードが正しくありません" });
       }
     } catch (error: any) {

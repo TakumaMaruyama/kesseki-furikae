@@ -41,9 +41,12 @@ export function AdminLoginForm({ onSuccess }: AdminLoginFormProps) {
                 throw new Error("認証情報が正しくありません");
             }
         } catch (error: any) {
+            const isRateLimited = error.status === 429 || (typeof error.message === "string" && error.message.includes("多すぎます"));
             toast({
-                title: "認証エラー",
-                description: error.message || "パスワードが正しくありません",
+                title: isRateLimited ? "試行回数超過" : "認証エラー",
+                description: isRateLimited
+                    ? "ログイン試行が多すぎます。しばらく待ってから再試行してください。"
+                    : (error.message || "パスワードが正しくありません"),
                 variant: "destructive",
             });
         } finally {
