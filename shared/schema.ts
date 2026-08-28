@@ -36,8 +36,8 @@ const requiredClassBandEnum = z.enum(CLASS_BAND_VALUES, {
 
 export const DEFAULT_RECURRING_SLOT_WEEKS = 52;
 export const MAX_RECURRING_SLOT_WEEKS = 156;
-
-// Session storage table used by connect-pg-simple for staff authentication
+// Session storage table used by connect-pg-simple for staff authentication.
+// It stores admin login sessions separately from Replit Auth sessions.
 export const adminSessions = pgTable(
   "admin_sessions",
   {
@@ -450,7 +450,7 @@ export const createClosureEventRequestSchema = z.object({
   sharedCode: z
     .string()
     .trim()
-    .min(4, "共通コードは4文字以上で入力してください")
+    .min(8, "共通コードは8文字以上で入力してください")
     .max(30, "共通コードは30文字以内で入力してください")
     .regex(/^[A-Za-z0-9_-]+$/, "共通コードは半角英数字・ハイフン・アンダースコアのみ使用できます"),
   usageLimit: z.number().int().min(1, "利用上限は1以上で設定してください").max(500, "利用上限は500以下で設定してください"),

@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Link } from "wouter";
+import { useLocation } from "wouter";
 
 function formatSlotDateTimeFromId(slotId: string): string {
   const parsed = parseCanonicalSlotId(slotId);
@@ -67,10 +67,18 @@ function getReportTypeLabel(reportType: string | null | undefined): string {
   return reportType === "LATE" ? "遅刻" : "欠席";
 }
 
+function isValidConfirmCodeFormat(code: string): boolean {
+  if (!code) return false;
+  if (/^\d{6}$/.test(code)) return true;
+  if (/^[A-Z0-9]{8}$/.test(code.toUpperCase())) return true;
+  return false;
+}
+
 export default function StatusPage() {
   const [confirmCode, setConfirmCode] = useState("");
   const [searchedCode, setSearchedCode] = useState<string | null>(null);
   const { toast } = useToast();
+  const [, navigate] = useLocation();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["/api/lookup", searchedCode],
@@ -128,16 +136,33 @@ export default function StatusPage() {
     },
   });
 
+  const bookingTokenMutation = useMutation({
+    mutationFn: async ({ absenceId, code }: { absenceId: string; code: string }) => {
+      const result = await apiRequest("POST", "/api/booking-token", { confirmCode: code, absenceId }) as { resumeToken: string };
+      return result;
+    },
+    onSuccess: (data) => {
+      navigate(`/absence?token=${data.resumeToken}`);
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "エラー",
+        description: error.message || "振替予約ページへの移動に失敗しました。",
+      });
+    },
+  });
+
   const handleSearch = () => {
-    if (confirmCode.length !== 6) {
+    if (!isValidConfirmCodeFormat(confirmCode)) {
       toast({
         variant: "destructive",
         title: "入力エラー",
-        description: "6桁の確認コードを入力してください。",
+        description: "確認コードの形式が正しくありません。",
       });
       return;
     }
-    setSearchedCode(confirmCode);
+    setSearchedCode(confirmCode.toUpperCase());
   };
 
   return (
@@ -148,7 +173,7 @@ export default function StatusPage() {
             予約状況確認
           </h1>
           <p className="text-muted-foreground">
-            欠席登録時に表示された6桁の確認コードを入力してください
+            欠席登録時に表示された確認コードを入力してください
           </p>
         </div>
 
@@ -166,19 +191,17 @@ export default function StatusPage() {
                 <Input
                   id="confirmCode"
                   type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={6}
-                  placeholder="6桁の確認コード"
+                  maxLength={8}
+                  placeholder="確認コード"
                   value={confirmCode}
-                  onChange={(e) => setConfirmCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  onChange={(e) => setConfirmCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))}
                   className="text-center text-lg md:text-2xl tracking-[0.2em] placeholder:tracking-normal placeholder:text-xs md:placeholder:text-sm font-mono"
                   data-testid="input-confirm-code"
                 />
               </div>
               <Button
                 onClick={handleSearch}
-                disabled={confirmCode.length !== 6 || isLoading}
+                disabled={!isValidConfirmCodeFormat(confirmCode) || isLoading}
                 data-testid="button-search"
               >
                 {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <SearchIcon className="w-4 h-4 mr-2" />}
@@ -254,11 +277,15 @@ export default function StatusPage() {
                           </div>
                           {absence.makeupStatus === "PENDING" && absence.reportType !== "LATE" && (
                             <div className="mt-4 flex gap-2">
-                              <Link href={`/absence?token=${absence.resumeToken}`}>
-                                <Button size="sm" data-testid={`button-book-${absence.id}`}>
-                                  振替予約へ進む
-                                </Button>
-                              </Link>
+                              <Button
+                                size="sm"
+                                data-testid={`button-book-${absence.id}`}
+                                disabled={bookingTokenMutation.isPending}
+                                onClick={() => bookingTokenMutation.mutate({ absenceId: absence.id, code: searchedCode! })}
+                              >
+                                {bookingTokenMutation.isPending && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+                                振替予約へ進む
+                              </Button>
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>
                                   <Button

@@ -19,9 +19,12 @@ import {
   updateCourseRequestSchema,
   createTrialParticipantRequestSchema,
   updateTrialParticipantRequestSchema,
+  createNewEnrolleeRequestSchema,
+  updateNewEnrolleeRequestSchema,
   updateClosureEventSlotsRequestSchema,
   validateClosureCodeRequestSchema,
   redeemClosureCodeRequestSchema,
+  type InsertNewEnrollee,
 } from "@shared/schema";
 import type { BookRequest } from "@shared/schema";
 import { sendConfirmationEmail, sendExpiredEmail, sendAbsenceConfirmationEmail, sendMakeupConfirmationEmail, sendCancellationEmail, sendRequestCancellationEmail } from "./email-service";
@@ -62,10 +65,12 @@ import {
 import {
   generateUniqueAbsenceConfirmCode,
   isAbsenceConfirmCodeUniqueViolation,
+  isValidConfirmCodeFormat,
 } from "./confirmCode";
 import { getAdminAbsenceHistory, getAdminRequestHistory } from "./adminHistory";
+import rateLimit from "express-rate-limit";
 
-
+// Rate limiters for public low-entropy credential endpoints
 const ADMIN_HISTORY_MONTH_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])$/;
 const COACH_LOGIN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 const coachCredentialUpdateSchema = z.object({
@@ -1342,12 +1347,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Lookup by confirm code (for parents to check their status)
-  app.get("/api/lookup/:confirmCode", async (req, res) => {
+  app.get("/api/lookup/:confirmCode", lookupRateLimiter, async (req, res) => {
     try {
       const { confirmCode } = req.params;
 
-      if (!confirmCode || confirmCode.length !== 6) {
-        return res.status(400).json({ error: "6桁の確認コードを入力してください" });
+      if (!isValidConfirmCodeFormat(confirmCode)) {
+        return res.status(400).json({ error: "確認コードの形式が正しくありません" });
       }
 
       const userAbsences = await storage.getAbsencesByConfirmCode(confirmCode);
@@ -1361,10 +1366,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return bTime - aTime;
           });
 
+      // Strip all bearer/action tokens and PII before returning to client.
+      // resumeToken is omitted here; the status page obtains it via /api/booking-token
+      // (a separate rate-limited endpoint) to prevent token exfiltration via code enumeration.
+      const safeAbsences = userAbsences.map(({ resumeToken: _rt, contactEmail: _ce, reason: _r, ...rest }) => rest);
+      const safeRequests = userRequests.map(({ confirmToken: _ct, declineToken: _dt, cancelToken: _calt, contactEmail: _ce, ...rest }) => rest);
+
       res.json({
-        absences: userAbsences,
-        requests: userRequests,
+        absences: safeAbsences,
+        requests: safeRequests,
       });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Secure token exchange: given a valid (confirmCode, absenceId) pair, return the resumeToken
+  // so the status page can navigate to the booking flow without exposing the token in the lookup.
+  app.post("/api/booking-token", lookupRateLimiter, async (req, res) => {
+    try {
+      const { confirmCode, absenceId } = req.body;
+
+      if (!isValidConfirmCodeFormat(confirmCode) || !absenceId) {
+        return res.status(400).json({ error: "無効なリクエストです" });
+      }
+
+      const absence = await storage.getAbsenceById(absenceId);
+
+      if (!absence || absence.confirmCode !== confirmCode) {
+        return res.status(403).json({ error: "確認コードが一致しません" });
+      }
+
+      return res.json({ resumeToken: absence.resumeToken });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -1502,7 +1535,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Cancel absence by confirm code
-  app.post("/api/cancel-absence-by-id/:absenceId", async (req, res) => {
+  app.post("/api/cancel-absence-by-id/:absenceId", cancelByCodeRateLimiter, async (req, res) => {
     try {
       const absenceId = req.params.absenceId;
       const { confirmCode } = req.body;
@@ -1542,7 +1575,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Cancel request by confirm code
-  app.post("/api/cancel-request/:requestId", async (req, res) => {
+  app.post("/api/cancel-request/:requestId", cancelByCodeRateLimiter, async (req, res) => {
     try {
       const requestId = req.params.requestId;
       const { confirmCode } = req.body;
@@ -2157,7 +2190,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     };
   }
 
-  app.post("/api/closure-events/validate-code", async (req, res) => {
+  app.post("/api/closure-events/validate-code", closureCodeRateLimiter, async (req, res) => {
     try {
       const data = validateClosureCodeRequestSchema.parse(req.body);
       const sharedCode = normalizeSharedCode(data.sharedCode);
@@ -2214,7 +2247,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/closure-events/redeem", async (req, res) => {
+  app.post("/api/closure-events/redeem", closureCodeRateLimiter, async (req, res) => {
     try {
       const data = redeemClosureCodeRequestSchema.parse(req.body);
       const sharedCode = normalizeSharedCode(data.sharedCode);
@@ -3552,3 +3585,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
   return httpServer;
 }
+
+const lookupRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "試行回数が多すぎます。しばらく待ってから再度お試しください。" },
+  skipSuccessfulRequests: false,
+});
+
+const closureCodeRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "試行回数が多すぎます。しばらく待ってから再度お試しください。" },
+});
+
+const cancelByCodeRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "試行回数が多すぎます。しばらく待ってから再度お試しください。" },
+});
