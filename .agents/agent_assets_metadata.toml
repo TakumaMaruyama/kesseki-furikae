@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "AuhkkyxAyVq9OfnzDo7fI"
+uri = "file://artifacts/instagram-app-intro/exports/instagram-intro-1080x1920.mp4"
+type = "video"
+title = "Instagram紹介動画（完全9:16）"
+description = "1080×1920・9:16・H.264・30fps・約23秒。横長キャンバスや左右余白を含まないInstagram Reels向けMP4です。"
+logical_id = "874cc8cd-a0b1-437a-aa4d-36478fd5653a"
+content_hash = "sha256:9a263c98f26c96a98af41467bf713862dab7ad0cffdfc1a871cca3d5d5acdce8"
+size = 5213810
+mtime_ms = 1787930152673
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:5e222f50-e566-4a88-98f5-6339d6260a41/874cc8cd-a0b1-437a-aa4d-36478fd5653a/94665b04-5edb-49d9-a77e-0d36d861a2c2"
+storage_version_token = "1787930456099134"
+content_type = "video/mp4"

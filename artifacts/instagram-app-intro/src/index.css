@@ -5,7 +5,8 @@
 }
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
-body { -webkit-font-smoothing: antialiased; display: grid; place-items: center; }
+body { -webkit-font-smoothing: antialiased; }
+#root { display: grid; place-items: center; }
 .video-frame { position: relative; width: min(100vw, 56.25vh); height: min(100vh, 177.78vw); aspect-ratio: 9/16; overflow: hidden; background: #f8fbff; container-type: size; }
 .scene { position: absolute; inset: 0; padding: 7.4cqh 7.2cqw 5.5cqh; overflow: hidden; background: radial-gradient(circle at 85% 10%, #d9efff, transparent 25%), linear-gradient(160deg,#fafdff 20%,#eef7ff 100%); }
 .brand { display:flex; align-items:center; gap:2cqw; font-weight:900; letter-spacing:.16em; color:#0073d8; font-size:3.3cqw; }
