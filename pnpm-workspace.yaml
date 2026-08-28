@@ -1,0 +1,20 @@
+packages:
+  - "artifacts/*"
+
+catalog:
+  "@replit/vite-plugin-cartographer": "^0.4.1"
+  "@replit/vite-plugin-dev-banner": "^0.1.1"
+  "@replit/vite-plugin-runtime-error-modal": "^0.0.3"
+  "@tailwindcss/vite": "^4.1.3"
+  "@types/node": "20.16.11"
+  "@types/react": "^18.3.11"
+  "@types/react-dom": "^18.3.1"
+  "@vitejs/plugin-react": "^4.7.0"
+  "clsx": "^2.1.1"
+  "framer-motion": "^11.13.1"
+  "lucide-react": "^0.453.0"
+  "react": "^18.3.1"
+  "react-dom": "^18.3.1"
+  "tailwind-merge": "^2.6.0"
+  "tailwindcss": "^4.1.3"
+  "vite": "^6.4.3"
