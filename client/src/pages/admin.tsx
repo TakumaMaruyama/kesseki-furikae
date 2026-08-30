@@ -1111,6 +1111,11 @@ export default function AdminPage() {
 
       <SlotDialog
         slot={editingSlotData}
+        initialDate={
+          !editingSlotData && viewMode === "calendar" && selectedDate
+            ? formatJstDate(selectedDate)
+            : undefined
+        }
         open={showSlotDialog}
         onOpenChange={setShowSlotDialog}
         onSave={(data) => {

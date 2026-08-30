@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { format } from "date-fns";
+import { ja } from "date-fns/locale";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -15,12 +17,13 @@ import { getMakeupCapacityLimit } from "@shared/capacity";
 
 export type SlotDialogProps = {
     slot: ClassSlotWithTrialParticipantCount | null;
+    initialDate?: string;
     open: boolean;
     onOpenChange: (open: boolean) => void;
     onSave: (data: any) => void;
 };
 
-export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps) {
+export function SlotDialog({ slot, initialDate, open, onOpenChange, onSave }: SlotDialogProps) {
     const [classBandCapacities, setClassBandCapacities] = useState<Record<string, any>>({});
     const { data: courses = [] } = useQuery<Course[]>({
         queryKey: ["/api/admin/courses"],
@@ -52,7 +55,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
             }
             : {
                 courseId: "",
-                date: "",
+                date: initialDate ?? "",
                 startTime: "10:00",
                 courseLabel: "",
                 classBands: [],
@@ -94,7 +97,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
         } else {
             setClassBandCapacities({});
             form.reset({
-                date: "",
+                date: initialDate ?? "",
                 startTime: "10:00",
                 courseLabel: "",
                 classBands: [],
@@ -103,7 +106,7 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                 applyToFuture: false,
             });
         }
-    }, [slot, open]);
+    }, [slot, open, initialDate]);
 
     const selectedBands = form.watch("classBands") || [];
     const recurringStartDate = form.watch("date");
@@ -181,15 +184,30 @@ export function SlotDialog({ slot, open, onOpenChange, onSave }: SlotDialogProps
                             <FormField
                                 control={form.control}
                                 name="date"
-                                render={({ field }) => (
+                                render={({ field }) => {
+                                    const slotDateISO = slot ? formatJstDate(slot.date) : "";
+                                    return (
                                     <FormItem>
                                         <FormLabel>日付</FormLabel>
-                                        <FormControl>
-                                            <Input {...field} type="date" data-testid="input-slot-date" />
-                                        </FormControl>
+                                        {slot ? (
+                                            <>
+                                                <input {...field} value={slotDateISO} type="hidden" data-testid="input-slot-date" />
+                                                <div
+                                                    className="flex h-10 items-center rounded-md border border-input bg-muted px-3 py-2 text-sm"
+                                                    data-testid="display-slot-date"
+                                                >
+                                                    {format(parseJstDate(slotDateISO), "yyyy年M月d日(E)", { locale: ja })}
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <FormControl>
+                                                <Input {...field} type="date" data-testid="input-slot-date" />
+                                            </FormControl>
+                                        )}
                                         <FormMessage />
                                     </FormItem>
-                                )}
+                                    );
+                                }}
                             />
                             <FormField
                                 control={form.control}

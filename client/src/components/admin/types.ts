@@ -44,6 +44,7 @@ export type CourseDialogProps = {
 
 export type SlotDialogProps = {
     slot: ClassSlotWithTrialParticipantCount | null;
+    initialDate?: string;
     open: boolean;
     onOpenChange: (open: boolean) => void;
     onSave: (data: any) => void;

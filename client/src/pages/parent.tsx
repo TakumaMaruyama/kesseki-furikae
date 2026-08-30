@@ -30,6 +30,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { addJstDays, formatJstDate, parseJstDate } from "@shared/jst";
 import { getActualCurrent, getRemainingCapacity } from "@shared/capacity";
 import {
+  filterSelectableAbsenceSlots,
+  getAutoSelectedAbsenceSlotId,
+  isCurrentAbsenceSlotSelectionRequest,
+} from "@/lib/absence-slot-selection";
+import {
   buildSlotDateSummaries,
   getDefaultSlotDate,
   type SlotStatusCode,
@@ -269,6 +274,7 @@ export default function ParentPage() {
   const contactEmailInputRef = useRef<HTMLInputElement | null>(null);
   const [slotOptionsByKey, setSlotOptionsByKey] = useState<Record<string, ClassSlotOption[]>>({});
   const [loadingSlotKeys, setLoadingSlotKeys] = useState<Set<string>>(new Set());
+  const slotSelectionRequestRef = useRef<Record<number, number>>({});
   const [closureCode, setClosureCode] = useState("");
   const [closureValidation, setClosureValidation] = useState<ClosureValidationResult | null>(null);
   const [isValidatingClosureCode, setIsValidatingClosureCode] = useState(false);
@@ -499,7 +505,10 @@ export default function ParentPage() {
       if (firstSlot) {
         absenceForm.setValue("items.0.absentDateISO", firstSlot.date);
         absenceForm.setValue("items.0.declaredClassBand", firstSlot.classBand);
-        absenceForm.setValue("items.0.originalSlotId", firstSlot.id);
+        const matchingFirstSlots = result.slots.filter(
+          (slot) => slot.date === firstSlot.date && slot.classBand === firstSlot.classBand,
+        );
+        absenceForm.setValue("items.0.originalSlotId", getAutoSelectedAbsenceSlotId(matchingFirstSlots));
       }
 
       toast({
@@ -553,31 +562,61 @@ export default function ParentPage() {
 
   const handleRowClassBandChange = async (index: number, classBand: "初級" | "中級" | "上級") => {
     const currentDate = absenceForm.getValues(`items.${index}.absentDateISO` as const);
+    const requestId = (slotSelectionRequestRef.current[index] || 0) + 1;
+    slotSelectionRequestRef.current[index] = requestId;
 
     absenceForm.setValue(`items.${index}.declaredClassBand` as const, classBand, { shouldDirty: true, shouldValidate: true });
     absenceForm.setValue(`items.${index}.originalSlotId` as const, "", { shouldDirty: true, shouldValidate: true });
 
-    if (!isClosureMode && currentDate) {
-      const slots = await ensureNormalSlotOptions(currentDate, classBand);
-      const validSlots = slots.filter((slot) => !slot.isPastLesson);
-      if (validSlots.length === 1) {
-        absenceForm.setValue(`items.${index}.originalSlotId` as const, validSlots[0].id, { shouldDirty: true, shouldValidate: true });
-      }
+    const slots = isClosureMode
+      ? getClosureRowSlotOptions({ absentDateISO: currentDate || "", declaredClassBand: classBand } as CreateAbsencesBatchRequest["items"][number])
+      : currentDate
+        ? await ensureNormalSlotOptions(currentDate, classBand)
+        : [];
+    const validSlots = filterSelectableAbsenceSlots(slots, isClosureMode);
+    const latestRow = absenceForm.getValues(`items.${index}` as const);
+    if (
+      isCurrentAbsenceSlotSelectionRequest({
+        requestGeneration: requestId,
+        currentGeneration: slotSelectionRequestRef.current[index] || 0,
+        currentDate: latestRow.absentDateISO,
+        expectedDate: currentDate,
+        currentClassBand: latestRow.declaredClassBand,
+        expectedClassBand: classBand,
+      }) &&
+      getAutoSelectedAbsenceSlotId(validSlots)
+    ) {
+      absenceForm.setValue(`items.${index}.originalSlotId` as const, getAutoSelectedAbsenceSlotId(validSlots), { shouldDirty: true, shouldValidate: true });
     }
   };
 
   const handleRowDateChange = async (index: number, absentDateISO: string) => {
     const classBand = absenceForm.getValues(`items.${index}.declaredClassBand` as const);
+    const requestId = (slotSelectionRequestRef.current[index] || 0) + 1;
+    slotSelectionRequestRef.current[index] = requestId;
 
     absenceForm.setValue(`items.${index}.absentDateISO` as const, absentDateISO, { shouldDirty: true, shouldValidate: true });
     absenceForm.setValue(`items.${index}.originalSlotId` as const, "", { shouldDirty: true, shouldValidate: true });
 
-    if (!isClosureMode && classBand) {
-      const slots = await ensureNormalSlotOptions(absentDateISO, classBand);
-      const validSlots = slots.filter((slot) => !slot.isPastLesson);
-      if (validSlots.length === 1) {
-        absenceForm.setValue(`items.${index}.originalSlotId` as const, validSlots[0].id, { shouldDirty: true, shouldValidate: true });
-      }
+    const slots = isClosureMode
+      ? getClosureRowSlotOptions({ absentDateISO, declaredClassBand: classBand } as CreateAbsencesBatchRequest["items"][number])
+      : classBand
+        ? await ensureNormalSlotOptions(absentDateISO, classBand)
+        : [];
+    const validSlots = filterSelectableAbsenceSlots(slots, isClosureMode);
+    const latestRow = absenceForm.getValues(`items.${index}` as const);
+    if (
+      isCurrentAbsenceSlotSelectionRequest({
+        requestGeneration: requestId,
+        currentGeneration: slotSelectionRequestRef.current[index] || 0,
+        currentDate: latestRow.absentDateISO,
+        expectedDate: absentDateISO,
+        currentClassBand: latestRow.declaredClassBand,
+        expectedClassBand: classBand,
+      }) &&
+      getAutoSelectedAbsenceSlotId(validSlots)
+    ) {
+      absenceForm.setValue(`items.${index}.originalSlotId` as const, getAutoSelectedAbsenceSlotId(validSlots), { shouldDirty: true, shouldValidate: true });
     }
   };
 
@@ -965,9 +1004,7 @@ export default function ParentPage() {
                         const rowSlotOptions = isClosureMode
                           ? getClosureRowSlotOptions(row)
                           : (rowKey ? (slotOptionsByKey[rowKey] || []) : []);
-                        const selectableOptions = isClosureMode
-                          ? rowSlotOptions
-                          : rowSlotOptions.filter((slot) => !slot.isPastLesson);
+                        const selectableOptions = filterSelectableAbsenceSlots(rowSlotOptions, isClosureMode);
 
                         return (
                           <div key={field.id} className="border rounded-lg p-4 space-y-4">
@@ -1069,28 +1106,50 @@ export default function ParentPage() {
                               render={({ field: itemField }) => (
                                 <FormItem>
                                   <FormLabel>欠席するレッスン枠</FormLabel>
-                                  <Select
-                                    value={itemField.value || ""}
-                                    onValueChange={(value) => handleRowOriginalSlotChange(index, value)}
-                                    disabled={!row?.absentDateISO || !row?.declaredClassBand}
-                                  >
+                                  {!row?.absentDateISO || !row?.declaredClassBand ? (
+                                    <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                                      先に欠席日とクラス帯を選択してください
+                                    </p>
+                                  ) : selectableOptions.length > 0 ? (
                                     <FormControl>
-                                      <SelectTrigger className="h-12" data-testid={`select-original-slot-${index}`}>
-                                        <SelectValue placeholder={
-                                          !row?.absentDateISO || !row?.declaredClassBand
-                                            ? "先に欠席日とクラス帯を選択"
-                                            : "レッスン枠を選択"
-                                        } />
-                                      </SelectTrigger>
+                                      <div
+                                        className="grid gap-2"
+                                        role="radiogroup"
+                                        aria-label="欠席するレッスン枠"
+                                        data-testid={`original-slot-options-${index}`}
+                                      >
+                                        {selectableOptions.map((slot) => {
+                                          const isSelected = itemField.value === slot.id;
+                                          return (
+                                            <button
+                                              key={slot.id}
+                                              type="button"
+                                              role="radio"
+                                              aria-checked={isSelected}
+                                              aria-label={`${slot.startTime} - ${slot.courseLabel}（${slot.classBand}）`}
+                                              onClick={() => handleRowOriginalSlotChange(index, slot.id)}
+                                              className={`w-full rounded-md border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+                                                isSelected
+                                                  ? "border-primary bg-primary/10 ring-1 ring-primary"
+                                                  : "border-input bg-background hover:bg-accent"
+                                              }`}
+                                              data-testid={`button-original-slot-${index}-${slot.id}`}
+                                            >
+                                              <span className="flex items-center justify-between gap-3">
+                                                <span>
+                                                  <span className="block font-semibold">{slot.startTime}</span>
+                                                  <span className="block text-sm text-muted-foreground">{slot.courseLabel}（{slot.classBand}）</span>
+                                                </span>
+                                                <span className="text-sm font-medium text-primary" aria-hidden="true">
+                                                  {isSelected ? "選択中" : "選択"}
+                                                </span>
+                                              </span>
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
                                     </FormControl>
-                                    <SelectContent>
-                                      {selectableOptions.map((slot) => (
-                                        <SelectItem key={slot.id} value={slot.id}>
-                                          {slot.startTime} - {slot.courseLabel}（{slot.classBand}）
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
+                                  ) : null}
                                   {!isClosureMode && isLoadingRowSlots && (
                                     <p className="text-xs text-muted-foreground mt-1">レッスン枠を読み込み中です...</p>
                                   )}
