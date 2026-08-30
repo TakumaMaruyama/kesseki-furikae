@@ -20,6 +20,7 @@
     "slots:repair-time": "tsx scripts/repair-slot-time-drift.ts",
     "slots:audit-attendance": "tsx scripts/audit-attendance-consistency.ts",
     "slots:repair-attendance": "tsx scripts/repair-attendance-consistency.ts",
+    "parent:verify-slot-calendar": "tsx scripts/verify-parent-slot-calendar.ts",
     "server:verify-error-handler": "tsx scripts/verify-error-handler.ts"
   },
   "overrides": {

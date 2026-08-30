@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
+import type { DayContentProps } from "react-day-picker";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -11,7 +12,7 @@ import {
   type SearchSlotsRequest,
   type SlotSearchResult,
 } from "@shared/schema";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -28,6 +29,11 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { addJstDays, formatJstDate, parseJstDate } from "@shared/jst";
 import { getActualCurrent, getRemainingCapacity } from "@shared/capacity";
+import {
+  buildSlotDateSummaries,
+  getDefaultSlotDate,
+  type SlotStatusCode,
+} from "@/lib/slot-calendar";
 
 type ReportType = "ABSENCE" | "LATE";
 
@@ -107,6 +113,38 @@ const EMAIL_CONFIRM_NOTICE_MESSAGE = "メールアドレスを入力した場合
 
 function getReportTypeLabel(reportType: ReportType): string {
   return reportType === "LATE" ? "遅刻" : "欠席";
+}
+
+const STATUS_TEXT_CLASS: Record<SlotStatusCode, string> = {
+  "〇": "text-emerald-600",
+  "△": "text-amber-600",
+  "×": "text-red-600",
+};
+
+function AvailabilityDayContent({
+  date,
+  activeModifiers,
+  statusCodes,
+}: DayContentProps & { statusCodes: SlotStatusCode[] }) {
+  const statusClassName = activeModifiers.selected ? "text-primary-foreground" : undefined;
+
+  return (
+    <span className="flex h-full flex-col items-center justify-center leading-none">
+      <span>{format(date, "d")}</span>
+      {statusCodes.length > 0 && (
+        <span className="mt-1 flex gap-0.5 text-[10px] font-bold" aria-hidden="true">
+          {statusCodes.map((statusCode) => (
+            <span
+              key={statusCode}
+              className={statusClassName || STATUS_TEXT_CLASS[statusCode]}
+            >
+              {statusCode}
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
+  );
 }
 
 // Helper to safely parse date string to local Date object avoiding timezone shifts
@@ -359,7 +397,7 @@ export default function ParentPage() {
       absentDateISO: data.absentDate,
       absenceId: data.id,
     });
-    setSelectedDate(parseJstDate(data.absentDate));
+    setSelectedDate(undefined);
     setViewMode("calendar");
   };
 
@@ -402,7 +440,13 @@ export default function ParentPage() {
     }
   }, [token]);
 
-  const { data: slots, isLoading } = useQuery<SlotSearchResult[]>({
+  const {
+    data: slots,
+    isLoading,
+    isError: isSlotSearchError,
+    isFetching: isSlotSearchFetching,
+    refetch: refetchSlots,
+  } = useQuery<SlotSearchResult[]>({
     queryKey: ["/api/search-slots", searchParams2],
     enabled: !!searchParams2,
     queryFn: async () => {
@@ -410,6 +454,29 @@ export default function ParentPage() {
       return await apiRequest("POST", "/api/search-slots", searchParams2) as SlotSearchResult[];
     },
   });
+
+  const slotDateSummaries = useMemo(
+    () => buildSlotDateSummaries(slots ?? []),
+    [slots],
+  );
+  const defaultSlotDateKey = searchParams2
+    ? getDefaultSlotDate(slotDateSummaries, searchParams2.absentDateISO)
+    : undefined;
+  const bookableSlotCount = slots?.filter((slot) => slot.statusCode !== "×").length ?? 0;
+  const selectedDaySlots = selectedDate
+    ? slotDateSummaries.get(formatJstDate(selectedDate))?.slots ?? []
+    : [];
+
+  useEffect(() => {
+    if (!slots) return;
+
+    setSelectedDate((currentDate) => {
+      if (currentDate && slotDateSummaries.has(formatJstDate(currentDate))) {
+        return currentDate;
+      }
+      return defaultSlotDateKey ? parseJstDate(defaultSlotDateKey) : undefined;
+    });
+  }, [slots, defaultSlotDateKey, slotDateSummaries]);
 
   const handleValidateClosureCode = async () => {
     if (!closureCode.trim()) {
@@ -1302,7 +1369,29 @@ export default function ParentPage() {
               </div>
             )}
 
-            {!isLoading && slots && slots.length === 0 && (
+            {!isLoading && isSlotSearchError && (
+              <Card className="border-2 border-destructive/50">
+                <CardContent className="p-8 text-center">
+                  <AlertTriangleIcon className="w-12 h-12 mx-auto mb-4 text-destructive" />
+                  <p className="text-lg font-semibold">振替枠を読み込めませんでした</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    通信状況を確認して、もう一度お試しください。
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mt-4"
+                    onClick={() => refetchSlots()}
+                    disabled={isSlotSearchFetching}
+                    data-testid="button-retry-slot-search"
+                  >
+                    {isSlotSearchFetching ? "再読み込み中..." : "再読み込み"}
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+
+            {!isLoading && !isSlotSearchError && slots && slots.length === 0 && (
               <Card className="border-2">
                 <CardContent className="p-12 text-center">
                   <ClockIcon className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
@@ -1313,13 +1402,15 @@ export default function ParentPage() {
               </Card>
             )}
 
-            {slots && slots.length > 0 && (
+            {!isSlotSearchError && slots && slots.length > 0 && (
               <Card className="border-2">
-                <CardHeader className="p-6 flex-row items-start justify-between gap-4 space-y-0">
+                <CardHeader className="p-4 sm:p-6 flex-col sm:flex-row items-start justify-between gap-4 space-y-0">
                   <div>
                     <h2 className="text-2xl font-bold">検索結果</h2>
                     <p className="text-sm text-muted-foreground mt-1">
-                      {slots.length}件の振替可能枠が見つかりました
+                      {bookableSlotCount > 0
+                        ? `予約可能 ${bookableSlotCount}件／全${slots.length}件`
+                        : `空きのある枠はありません（満席${slots.length}件）`}
                     </p>
                   </div>
                   <div className="flex border-2 rounded-lg overflow-hidden">
@@ -1349,22 +1440,57 @@ export default function ParentPage() {
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="p-6 pt-0">
+                <CardContent className="p-3 pt-0 sm:p-6 sm:pt-0">
                   {viewMode === "calendar" && (
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                      <div className="flex justify-center">
-                        <Calendar
-                          mode="single"
-                          selected={selectedDate}
-                          onSelect={setSelectedDate}
-                          modifiers={{
-                            hasSlots: slots.map(s => parseJstDate(formatJstDate(s.date))),
-                          }}
-                          modifiersClassNames={{
-                            hasSlots: "bg-primary/20 text-primary-foreground font-bold",
-                          }}
-                          className="rounded-md border"
-                        />
+                      <div>
+                        <div className="flex justify-center">
+                          <Calendar
+                            key={defaultSlotDateKey}
+                            mode="single"
+                            defaultMonth={defaultSlotDateKey ? parseJstDate(defaultSlotDateKey) : undefined}
+                            selected={selectedDate}
+                            onSelect={setSelectedDate}
+                            disabled={(date) => !slotDateSummaries.has(formatJstDate(date))}
+                            labels={{
+                              labelDay: (date) => {
+                                const summary = slotDateSummaries.get(formatJstDate(date));
+                                const dateLabel = format(date, "M月d日(E)", { locale: ja });
+                                if (!summary) return `${dateLabel}、対象枠なし`;
+
+                                const statusLabels = summary.statusCodes.map((statusCode) => {
+                                  const count = summary.statusCounts[statusCode];
+                                  if (statusCode === "〇") return `空き2枠以上が${count}件`;
+                                  if (statusCode === "△") return `残り1枠が${count}件`;
+                                  return `満席が${count}件`;
+                                });
+                                return `${dateLabel}、${statusLabels.join("、")}`;
+                              },
+                            }}
+                            components={{
+                              DayContent: (props) => (
+                                <AvailabilityDayContent
+                                  {...props}
+                                  statusCodes={
+                                    slotDateSummaries.get(formatJstDate(props.date))?.statusCodes ?? []
+                                  }
+                                />
+                              ),
+                            }}
+                            classNames={{
+                              head_cell: "text-muted-foreground rounded-md w-10 font-normal text-[0.8rem]",
+                              cell: "h-12 w-10 text-center text-sm p-0 relative [&:has([aria-selected].day-range-end)]:rounded-r-md [&:has([aria-selected].day-outside)]:bg-accent/50 [&:has([aria-selected])]:bg-accent first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20",
+                              day: `${buttonVariants({ variant: "ghost" })} h-12 w-10 p-0 font-normal aria-selected:opacity-100`,
+                            }}
+                            className="rounded-md border p-2"
+                          />
+                        </div>
+                        <div className="mt-3 flex flex-wrap justify-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                          <span><strong className="text-emerald-600">〇</strong> 空き2枠以上</span>
+                          <span><strong className="text-amber-600">△</strong> 残り1枠</span>
+                          <span><strong className="text-red-600">×</strong> 満席</span>
+                          <span>表示なし 対象枠なし</span>
+                        </div>
                       </div>
                       <div className="space-y-3">
                         {selectedDate && (
@@ -1372,20 +1498,14 @@ export default function ParentPage() {
                             <p className="font-semibold">
                               {format(selectedDate, "yyyy年M月d日(E)", { locale: ja })}の振替枠
                             </p>
-                            {slots
-                              .filter(s => formatJstDate(s.date) === formatJstDate(selectedDate))
-                              .map(slot => (
-                                <SlotCard
-                                  key={slot.slotId}
-                                  slot={slot}
-                                  onBook={handleBook}
-                                  absenceId={absenceData?.id}
-                                />
-                              ))
-                            }
-                            {slots.filter(s => formatJstDate(s.date) === formatJstDate(selectedDate)).length === 0 && (
-                              <p className="text-muted-foreground text-sm">この日に利用可能な枠はありません</p>
-                            )}
+                            {selectedDaySlots.map(slot => (
+                              <SlotCard
+                                key={slot.slotId}
+                                slot={slot}
+                                onBook={handleBook}
+                                absenceId={absenceData?.id}
+                              />
+                            ))}
                           </>
                         )}
                         {!selectedDate && (
