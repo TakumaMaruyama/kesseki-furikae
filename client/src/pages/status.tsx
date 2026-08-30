@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 
 function formatSlotDateTimeFromId(slotId: string): string {
   const parsed = parseCanonicalSlotId(slotId);
@@ -76,6 +76,7 @@ export default function StatusPage() {
   const [confirmCode, setConfirmCode] = useState("");
   const [searchedCode, setSearchedCode] = useState<string | null>(null);
   const { toast } = useToast();
+  const [, navigate] = useLocation();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["/api/lookup", searchedCode],
@@ -129,6 +130,22 @@ export default function StatusPage() {
         variant: "destructive",
         title: "エラー",
         description: error.message || "キャンセルに失敗しました。",
+      });
+    },
+  });
+
+  const bookingTokenMutation = useMutation({
+    mutationFn: async ({ absenceId, code }: { absenceId: string; code: string }) => {
+      return apiRequest("POST", "/api/booking-token", { confirmCode: code, absenceId }) as Promise<{ resumeToken: string }>;
+    },
+    onSuccess: ({ resumeToken }) => {
+      navigate(`/absence?token=${resumeToken}`);
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "エラー",
+        description: error.message || "振替予約ページへの移動に失敗しました。",
       });
     },
   });
@@ -261,11 +278,15 @@ export default function StatusPage() {
                           </div>
                           {absence.makeupStatus === "PENDING" && absence.reportType !== "LATE" && (
                             <div className="mt-4 flex gap-2">
-                              <Link href={`/absence?token=${absence.resumeToken}`}>
-                                <Button size="sm" data-testid={`button-book-${absence.id}`}>
-                                  振替予約へ進む
-                                </Button>
-                              </Link>
+                              <Button
+                                size="sm"
+                                data-testid={`button-book-${absence.id}`}
+                                disabled={bookingTokenMutation.isPending}
+                                onClick={() => bookingTokenMutation.mutate({ absenceId: absence.id, code: searchedCode! })}
+                              >
+                                {bookingTokenMutation.isPending && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+                                振替予約へ進む
+                              </Button>
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>
                                   <Button

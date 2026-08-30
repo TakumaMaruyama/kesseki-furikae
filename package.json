@@ -21,7 +21,8 @@
     "slots:audit-attendance": "tsx scripts/audit-attendance-consistency.ts",
     "slots:repair-attendance": "tsx scripts/repair-attendance-consistency.ts",
     "parent:verify-slot-calendar": "tsx scripts/verify-parent-slot-calendar.ts",
-    "server:verify-error-handler": "tsx scripts/verify-error-handler.ts"
+    "server:verify-error-handler": "tsx scripts/verify-error-handler.ts",
+    "security:verify": "tsx scripts/verify-security-hardening.ts"
   },
   "overrides": {
     "minimatch": "10.2.5",
@@ -91,6 +92,7 @@
     "drizzle-zod": "^0.7.0",
     "embla-carousel-react": "^8.6.0",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.5.2",
     "express-session": "^1.18.1",
     "framer-motion": "^11.13.1",
     "input-otp": "^1.4.2",

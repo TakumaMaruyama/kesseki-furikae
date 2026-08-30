@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { ListIcon, CalendarIcon, LogOutIcon, Loader2, ArchiveIcon } from "lucide-react";
+import { ListIcon, CalendarIcon, LogOutIcon, Loader2, ArchiveIcon, RefreshCw } from "lucide-react";
 import { useLocation } from "wouter";
 import type { ClassSlotWithTrialParticipantCount } from "@shared/schema";
 import { formatJstDate, parseJstDate } from "@shared/jst";
@@ -389,6 +389,15 @@ export default function AdminPage() {
       newSelection.add(slotId);
     }
     setSelectedClosureSlotIds(newSelection);
+  };
+
+  const generateSharedCode = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const randomValues = new Uint8Array(10);
+    crypto.getRandomValues(randomValues);
+    setClosureSharedCode(
+      Array.from(randomValues, (value) => chars[value % chars.length]).join(""),
+    );
   };
 
   const handleCreateClosureEvent = () => {
@@ -963,12 +972,28 @@ export default function AdminPage() {
                   </div>
                   <div className="space-y-2">
                     <p className="text-sm font-medium">共通コード</p>
-                    <Input
-                      value={closureSharedCode}
-                      onChange={(event) => setClosureSharedCode(event.target.value)}
-                      placeholder="例: TAIFU0815"
-                      data-testid="input-closure-shared-code"
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        value={closureSharedCode}
+                        onChange={(event) => setClosureSharedCode(event.target.value.toUpperCase())}
+                        placeholder="例: TAIFU0815"
+                        data-testid="input-closure-shared-code"
+                        className="font-mono"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        onClick={generateSharedCode}
+                        title="ランダムに生成"
+                        data-testid="button-generate-shared-code"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      推測されにくいコードにするか、右のボタンでランダム生成してください。
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <p className="text-sm font-medium">利用上限</p>

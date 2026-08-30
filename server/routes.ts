@@ -1,5 +1,6 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
+import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
 import { db } from "./db";
 import { classSlots, absences, requests, trialParticipants, closureEvents, closureEventSlots } from "@shared/schema";
@@ -64,6 +65,7 @@ import {
   isAbsenceConfirmCodeUniqueViolation,
 } from "./confirmCode";
 import { getAdminAbsenceHistory, getAdminRequestHistory } from "./adminHistory";
+import { toPublicLookupAbsence, toPublicLookupRequest } from "./publicLookup";
 
 
 const ADMIN_HISTORY_MONTH_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])$/;
@@ -1290,14 +1292,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })
   );
 
+  // Successful logins do not consume this limit; failed attempts do.
+  const adminLoginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    message: { error: "ログイン試行が多すぎます。しばらく待ってから再試行してください。" },
+  });
+
   // Shared administrator/coach authentication endpoint
-  app.post("/api/admin/login", async (req, res) => {
+  app.post("/api/admin/login", adminLoginLimiter, async (req, res) => {
     try {
       const rawLoginId = typeof req.body?.loginId === "string" ? req.body.loginId.trim() : "";
       const loginId = rawLoginId || "admin";
       const password = typeof req.body?.password === "string" ? req.body.password : "";
 
       if (!password) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1500));
         return res.status(401).json({ error: "ログインIDまたはパスワードが正しくありません" });
       }
 
@@ -1317,6 +1330,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (!role || !passwordHash) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1500));
         return res.status(401).json({ error: "ログインIDまたはパスワードが正しくありません" });
       }
 
@@ -1325,9 +1339,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (isMatch) {
         await saveStaffSession(req, role);
         return res.json({ success: true, role });
-      } else {
-        return res.status(401).json({ error: "ログインIDまたはパスワードが正しくありません" });
       }
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+      return res.status(401).json({ error: "ログインIDまたはパスワードが正しくありません" });
     } catch (error: any) {
       console.error("スタッフログインエラー:", error);
       res.status(500).json({ error: "認証処理に失敗しました" });
@@ -1390,7 +1405,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Lookup by confirm code (for parents to check their status)
-  app.get("/api/lookup/:confirmCode", async (req, res) => {
+  app.get("/api/lookup/:confirmCode", lookupRateLimiter, async (req, res) => {
     try {
       const confirmCode = normalizeConfirmCode(req.params.confirmCode || "");
 
@@ -1409,12 +1424,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return bTime - aTime;
           });
 
+      // The lookup response is intentionally display-only. Action tokens and
+      // contact details stay server-side and are exchanged only when needed.
       res.json({
-        absences: userAbsences,
-        requests: userRequests,
+        absences: userAbsences.map(toPublicLookupAbsence),
+        requests: userRequests.map(toPublicLookupRequest),
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Exchange a confirmation code and absence ID for the booking capability
+  // only after both values are verified. The token never appears in lookup.
+  app.post("/api/booking-token", bookingTokenRateLimiter, async (req, res) => {
+    try {
+      const confirmCode = normalizeConfirmCode(String(req.body?.confirmCode || ""));
+      const absenceId = typeof req.body?.absenceId === "string" ? req.body.absenceId : "";
+
+      if (!isValidConfirmCode(confirmCode) || !absenceId) {
+        return res.status(400).json({ error: "無効なリクエストです" });
+      }
+
+      const absence = await storage.getAbsenceById(absenceId);
+      if (!absence || normalizeConfirmCode(absence.confirmCode) !== confirmCode) {
+        return res.status(403).json({ error: "確認コードが一致しません" });
+      }
+
+      return res.json({ resumeToken: absence.resumeToken });
+    } catch (_error: any) {
+      res.status(500).json({ error: "振替予約の準備に失敗しました。" });
     }
   });
 
@@ -1550,7 +1589,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Cancel absence by confirm code
-  app.post("/api/cancel-absence-by-id/:absenceId", async (req, res) => {
+  app.post("/api/cancel-absence-by-id/:absenceId", cancelByCodeRateLimiter, async (req, res) => {
     try {
       const absenceId = req.params.absenceId;
       const confirmCode = normalizeConfirmCode(String(req.body?.confirmCode || ""));
@@ -1590,7 +1629,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Cancel request by confirm code
-  app.post("/api/cancel-request/:requestId", async (req, res) => {
+  app.post("/api/cancel-request/:requestId", cancelByCodeRateLimiter, async (req, res) => {
     try {
       const requestId = req.params.requestId;
       const confirmCode = normalizeConfirmCode(String(req.body?.confirmCode || ""));
@@ -2199,7 +2238,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     };
   }
 
-  app.post("/api/closure-events/validate-code", async (req, res) => {
+  app.post("/api/closure-events/validate-code", closureCodeRateLimiter, async (req, res) => {
     try {
       const data = validateClosureCodeRequestSchema.parse(req.body);
       const sharedCode = normalizeSharedCode(data.sharedCode);
@@ -2256,7 +2295,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/closure-events/redeem", async (req, res) => {
+  app.post("/api/closure-events/redeem", closureCodeRateLimiter, async (req, res) => {
     try {
       const data = redeemClosureCodeRequestSchema.parse(req.body);
       const sharedCode = normalizeSharedCode(data.sharedCode);
@@ -2572,6 +2611,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/admin/book", requireAdmin, async (req, res) => {
+    return handleMakeupBooking(req, res, {
+      allowOverCapacity: true,
+      requireAbsence: true,
+    });
+  });
+
+  app.post("/api/admin/book-without-absence", requireAdmin, async (req, res) => {
     return handleMakeupBooking(req, res, {
       allowOverCapacity: true,
       requireAbsence: false,
@@ -3570,3 +3616,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
   return httpServer;
 }
+
+const lookupRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "試行回数が多すぎます。しばらく待ってから再度お試しください。" },
+});
+
+const bookingTokenRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "試行回数が多すぎます。しばらく待ってから再度お試しください。" },
+});
+
+const closureCodeRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "試行回数が多すぎます。しばらく待ってから再度お試しください。" },
+});
+
+const cancelByCodeRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "試行回数が多すぎます。しばらく待ってから再度お試しください。" },
+});
