@@ -1,14 +1,20 @@
 import { randomInt } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { absences } from "@shared/schema";
+import {
+  CONFIRM_CODE_GENERATION_ALPHABET,
+  CONFIRM_CODE_LENGTH,
+  isValidConfirmCode,
+} from "@shared/confirmCode";
 
-const CONFIRM_CODE_LENGTH = 6;
-const CONFIRM_CODE_SPACE = 10 ** CONFIRM_CODE_LENGTH;
 const DEFAULT_MAX_ATTEMPTS = 20;
 const ABSENCE_CONFIRM_CODE_UNIQUE_INDEX = "UQ_absences_confirm_code";
 
-function generateConfirmCodeCandidate(): string {
-  return randomInt(0, CONFIRM_CODE_SPACE).toString().padStart(CONFIRM_CODE_LENGTH, "0");
+export function generateConfirmCodeCandidate(): string {
+  return Array.from(
+    { length: CONFIRM_CODE_LENGTH },
+    () => CONFIRM_CODE_GENERATION_ALPHABET[randomInt(0, CONFIRM_CODE_GENERATION_ALPHABET.length)],
+  ).join("");
 }
 
 async function hasAbsenceConfirmCode(executor: any, confirmCode: string): Promise<boolean> {
@@ -42,6 +48,9 @@ export async function generateUniqueAbsenceConfirmCode(
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const confirmCode = generateCandidate();
+    if (!isValidConfirmCode(confirmCode)) {
+      throw new Error("CONFIRM_CODE_INVALID");
+    }
     if (!(await hasConfirmCode(confirmCode))) {
       return confirmCode;
     }

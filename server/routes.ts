@@ -41,6 +41,7 @@ import {
 } from "@shared/jst";
 import { getActualCurrent, getRemainingCapacity, hasRemainingCapacity } from "@shared/capacity";
 import { buildCanonicalSlotId } from "@shared/slotId";
+import { isValidConfirmCode, normalizeConfirmCode } from "@shared/confirmCode";
 import {
   getCanonicalSlotStartDateTime,
   getSlotDateISO,
@@ -512,6 +513,66 @@ class DuplicateAbsenceError extends Error {
     this.name = "DuplicateAbsenceError";
     this.confirmCode = confirmCode;
   }
+}
+
+const PUBLIC_ABSENCE_CREATE_MESSAGES = new Set([
+  "指定されたレッスン枠が見つかりません。",
+  "休講対象枠のため通常欠席登録できません。休講用の共通コード導線をご利用ください。",
+  "選択したレッスン枠の日付が欠席日と一致しません。",
+  "選択したレッスン枠のクラス帯が一致しません。",
+  "レッスン開始時刻までに欠席連絡がないため、振替登録はできません。",
+]);
+
+function isConfirmCodeGenerationFailure(error: any): boolean {
+  return error?.message === "CONFIRM_CODE_EXHAUSTED" || error?.message === "CONFIRM_CODE_INVALID";
+}
+
+function toAbsenceBatchRowError(index: number, error: any): BatchRowError {
+  if (error instanceof BatchRowError) {
+    return error;
+  }
+  if (error instanceof DuplicateAbsenceError) {
+    return new BatchRowError(index, error.message, {
+      errorCode: error.errorCode,
+      confirmCode: error.confirmCode,
+    });
+  }
+  if (isConfirmCodeGenerationFailure(error)) {
+    return new BatchRowError(
+      index,
+      "確認コードの発行に失敗しました。時間をおいて再度お試しください。",
+      { errorCode: "CONFIRM_CODE_FAILURE" },
+    );
+  }
+  if (PUBLIC_ABSENCE_CREATE_MESSAGES.has(error?.message)) {
+    return new BatchRowError(index, error.message);
+  }
+
+  console.error("[absence:create] Unexpected failure", {
+    name: error?.name,
+    code: error?.code ?? error?.cause?.code,
+    constraint: error?.constraint_name ?? error?.constraint ?? error?.cause?.constraint,
+  });
+  return new BatchRowError(
+    index,
+    "登録に失敗しました。時間をおいてもう一度お試しください。",
+    { errorCode: "ABSENCE_CREATE_FAILED" },
+  );
+}
+
+function sendAbsenceBatchRowError(res: Response, error: BatchRowError) {
+  const status = error.errorCode === "DUPLICATE_ABSENCE"
+    ? 409
+    : error.errorCode === "CONFIRM_CODE_FAILURE" || error.errorCode === "ABSENCE_CREATE_FAILED"
+      ? 503
+      : 400;
+
+  return res.status(status).json({
+    error: error.message,
+    rowIndex: error.rowIndex,
+    code: error.errorCode,
+    confirmCode: error.confirmCode,
+  });
 }
 
 function normalizeAbsenceNameForDuplicate(childName: string): string {
@@ -1331,10 +1392,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Lookup by confirm code (for parents to check their status)
   app.get("/api/lookup/:confirmCode", async (req, res) => {
     try {
-      const { confirmCode } = req.params;
+      const confirmCode = normalizeConfirmCode(req.params.confirmCode || "");
 
-      if (!confirmCode || confirmCode.length !== 6) {
-        return res.status(400).json({ error: "6桁の確認コードを入力してください" });
+      if (!isValidConfirmCode(confirmCode)) {
+        return res.status(400).json({ error: "6文字の英数字で確認コードを入力してください" });
       }
 
       const userAbsences = await storage.getAbsencesByConfirmCode(confirmCode);
@@ -1492,10 +1553,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/cancel-absence-by-id/:absenceId", async (req, res) => {
     try {
       const absenceId = req.params.absenceId;
-      const { confirmCode } = req.body;
+      const confirmCode = normalizeConfirmCode(String(req.body?.confirmCode || ""));
 
-      if (!confirmCode) {
-        return res.status(400).json({ error: "確認コードが必要です" });
+      if (!isValidConfirmCode(confirmCode)) {
+        return res.status(400).json({ error: "6文字の英数字で確認コードを入力してください" });
       }
 
       const absence = await storage.getAbsenceById(absenceId);
@@ -1532,10 +1593,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/cancel-request/:requestId", async (req, res) => {
     try {
       const requestId = req.params.requestId;
-      const { confirmCode } = req.body;
+      const confirmCode = normalizeConfirmCode(String(req.body?.confirmCode || ""));
 
-      if (!confirmCode) {
-        return res.status(400).json({ error: "確認コードが必要です" });
+      if (!isValidConfirmCode(confirmCode)) {
+        return res.status(400).json({ error: "6文字の英数字で確認コードを入力してください" });
       }
 
       const request = await storage.getRequestById(requestId);
@@ -2122,13 +2183,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           created.push(item);
         } catch (error: any) {
-          if (error instanceof DuplicateAbsenceError) {
-            throw new BatchRowError(index, error.message, {
-              errorCode: error.errorCode,
-              confirmCode: error.confirmCode,
-            });
-          }
-          throw new BatchRowError(index, error.message || "登録に失敗しました。");
+          throw toAbsenceBatchRowError(index, error);
         }
       }
       return created;
@@ -2256,16 +2311,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
             created.push(item);
           } catch (error: any) {
-            if (error instanceof BatchRowError) {
-              throw error;
-            }
-            if (error instanceof DuplicateAbsenceError) {
-              throw new BatchRowError(index, error.message, {
-                errorCode: error.errorCode,
-                confirmCode: error.confirmCode,
-              });
-            }
-            throw new BatchRowError(index, error.message || "登録に失敗しました。");
+            throw toAbsenceBatchRowError(index, error);
           }
         }
 
@@ -2306,14 +2352,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       if (error instanceof BatchRowError) {
-        return res.status(error.errorCode === "DUPLICATE_ABSENCE" ? 409 : 400).json({
-          error: error.message,
-          rowIndex: error.rowIndex,
-          code: error.errorCode,
-          confirmCode: error.confirmCode,
-        });
+        return sendAbsenceBatchRowError(res, error);
       }
-      if (error.message === "CONFIRM_CODE_EXHAUSTED") {
+      if (isConfirmCodeGenerationFailure(error)) {
         return res.status(503).json({
           error: "確認コードの発行に失敗しました。時間をおいて再度お試しください。",
         });
@@ -2346,14 +2387,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       if (error instanceof BatchRowError) {
-        return res.status(error.errorCode === "DUPLICATE_ABSENCE" ? 409 : 400).json({
-          error: error.message,
-          rowIndex: error.rowIndex,
-          code: error.errorCode,
-          confirmCode: error.confirmCode,
-        });
+        return sendAbsenceBatchRowError(res, error);
       }
-      if (error.message === "CONFIRM_CODE_EXHAUSTED") {
+      if (isConfirmCodeGenerationFailure(error)) {
         return res.status(503).json({
           error: "確認コードの発行に失敗しました。時間をおいて再度お試しください。",
         });
@@ -2383,14 +2419,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       if (error instanceof BatchRowError) {
-        return res.status(error.errorCode === "DUPLICATE_ABSENCE" ? 409 : 400).json({
-          error: error.message,
-          rowIndex: error.rowIndex,
-          code: error.errorCode,
-          confirmCode: error.confirmCode,
-        });
+        return sendAbsenceBatchRowError(res, error);
       }
-      if (error.message === "CONFIRM_CODE_EXHAUSTED") {
+      if (isConfirmCodeGenerationFailure(error)) {
         return res.status(503).json({
           error: "確認コードの発行に失敗しました。時間をおいて再度お試しください。",
         });

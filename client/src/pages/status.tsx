@@ -4,6 +4,11 @@ import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { getRequestSlotDateTime } from "@shared/slotDateTime";
 import { parseSlotId as parseCanonicalSlotId } from "@shared/slotId";
+import {
+  CONFIRM_CODE_LENGTH,
+  isValidConfirmCode,
+  sanitizeConfirmCodeInput,
+} from "@shared/confirmCode";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -129,11 +134,11 @@ export default function StatusPage() {
   });
 
   const handleSearch = () => {
-    if (confirmCode.length !== 6) {
+    if (!isValidConfirmCode(confirmCode)) {
       toast({
         variant: "destructive",
         title: "入力エラー",
-        description: "6桁の確認コードを入力してください。",
+        description: "6文字の英数字で確認コードを入力してください。",
       });
       return;
     }
@@ -148,7 +153,7 @@ export default function StatusPage() {
             予約状況確認
           </h1>
           <p className="text-muted-foreground">
-            欠席登録時に表示された6桁の確認コードを入力してください
+            欠席登録時に表示された6文字の英数字を入力してください
           </p>
         </div>
 
@@ -166,19 +171,21 @@ export default function StatusPage() {
                 <Input
                   id="confirmCode"
                   type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={6}
-                  placeholder="6桁の確認コード"
+                  inputMode="text"
+                  autoCapitalize="characters"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  maxLength={CONFIRM_CODE_LENGTH}
+                  placeholder="6文字の確認コード"
                   value={confirmCode}
-                  onChange={(e) => setConfirmCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  onChange={(e) => setConfirmCode(sanitizeConfirmCodeInput(e.target.value))}
                   className="text-center text-lg md:text-2xl tracking-[0.2em] placeholder:tracking-normal placeholder:text-xs md:placeholder:text-sm font-mono"
                   data-testid="input-confirm-code"
                 />
               </div>
               <Button
                 onClick={handleSearch}
-                disabled={confirmCode.length !== 6 || isLoading}
+                disabled={!isValidConfirmCode(confirmCode) || isLoading}
                 data-testid="button-search"
               >
                 {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <SearchIcon className="w-4 h-4 mr-2" />}
