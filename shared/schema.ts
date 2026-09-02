@@ -551,6 +551,16 @@ export const deleteSlotRequestSchema = z.object({
 });
 
 const trialParticipantFieldSchema = z.string().trim().min(1).max(100);
+const jstDateInputSchema = z.string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "入会日はYYYY-MM-DD形式で指定してください")
+  .refine((value) => {
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year
+      && date.getUTCMonth() === month - 1
+      && date.getUTCDate() === day;
+  }, "入会日を正しく指定してください");
 
 export const createTrialParticipantRequestSchema = z.object({
   participantName: trialParticipantFieldSchema,
@@ -569,6 +579,33 @@ export const updateTrialParticipantRequestSchema = z.object({
   value.grade !== undefined ||
   value.swimLevel !== undefined ||
   value.slotId !== undefined
+), {
+  message: "更新項目を指定してください",
+});
+
+export const createNewEnrolleeRequestSchema = z.object({
+  childName: trialParticipantFieldSchema,
+  grade: trialParticipantFieldSchema.optional().or(z.literal("")),
+  classBand: classBandEnum.optional().nullable(),
+  joinedAtISO: jstDateInputSchema,
+  courseId: z.string().trim().min(1, "コースを選択してください"),
+  sourceTrialParticipantId: z.string().trim().optional().nullable(),
+});
+
+export const updateNewEnrolleeRequestSchema = z.object({
+  childName: trialParticipantFieldSchema.optional(),
+  grade: trialParticipantFieldSchema.optional().or(z.literal("")),
+  classBand: classBandEnum.optional().nullable(),
+  joinedAtISO: jstDateInputSchema.optional(),
+  courseId: z.string().trim().min(1, "コースを選択してください").optional(),
+  sourceTrialParticipantId: z.string().trim().optional().nullable(),
+}).refine((value) => (
+  value.childName !== undefined
+  || value.grade !== undefined
+  || value.classBand !== undefined
+  || value.joinedAtISO !== undefined
+  || value.courseId !== undefined
+  || value.sourceTrialParticipantId !== undefined
 ), {
   message: "更新項目を指定してください",
 });
@@ -653,6 +690,8 @@ export type UpdateSlotRequest = z.infer<typeof updateSlotRequestSchema>;
 export type DeleteSlotRequest = z.infer<typeof deleteSlotRequestSchema>;
 export type CreateTrialParticipantRequest = z.infer<typeof createTrialParticipantRequestSchema>;
 export type UpdateTrialParticipantRequest = z.infer<typeof updateTrialParticipantRequestSchema>;
+export type CreateNewEnrolleeRequest = z.infer<typeof createNewEnrolleeRequestSchema>;
+export type UpdateNewEnrolleeRequest = z.infer<typeof updateNewEnrolleeRequestSchema>;
 export type CancelAbsenceRequest = z.infer<typeof cancelAbsenceRequestSchema>;
 export type CancelRequest = z.infer<typeof cancelRequestSchema>;
 export type CreateChildRequest = z.infer<typeof createChildRequestSchema>;

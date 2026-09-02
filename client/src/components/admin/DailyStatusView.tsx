@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useDeferredValue, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
+import type { Course } from "@shared/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Calendar } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Loader2, UserX, UserCheck, UserIcon, PlusIcon, PencilIcon, TrashIcon } from "lucide-react";
+import { Loader2, UserX, UserCheck, UserIcon, PlusIcon, PencilIcon, TrashIcon, UsersIcon } from "lucide-react";
 
 interface DailyStatusItem {
     childName: string;
@@ -35,11 +36,24 @@ interface TrialParticipantItem {
     startTime: string;
 }
 
+interface NewEnrolleeItem {
+    id: string;
+    childName: string;
+    grade: string | null;
+    classBand: string | null;
+    joinedAt: string;
+    courseId: string | null;
+    courseName: string;
+    startTime: string;
+    sourceTrialParticipantId: string | null;
+}
+
 interface DailyStatusData {
     date: string;
     absentees: DailyAbsenceItem[];
     makeups: DailyStatusItem[];
     trialParticipants: TrialParticipantItem[];
+    newEnrollees: NewEnrolleeItem[];
 }
 
 interface DailyLessonItem {
@@ -56,14 +70,42 @@ interface TrialParticipantPayload {
     slotId: string;
 }
 
+interface NewEnrolleePayload {
+    childName: string;
+    grade: string;
+    classBand: string | null;
+    joinedAtISO: string;
+    courseId: string;
+    sourceTrialParticipantId: string | null;
+}
+
+interface TrialParticipantSearchItem {
+    id: string;
+    participantName: string;
+    grade: string;
+    swimLevel: string;
+    slotId: string;
+    slotDate: string;
+    startTime: string;
+    courseLabel: string;
+    classBand: string;
+}
+
+const CLASS_BAND_OPTIONS = ["初級", "中級", "上級"] as const;
+
 const CLASS_BAND_ORDER: Record<string, number> = {
     初級: 0,
     中級: 1,
     上級: 2,
 };
 
-function getClassBandOrder(classBand: string): number {
+function getClassBandOrder(classBand?: string | null): number {
+    if (!classBand) return Number.MAX_SAFE_INTEGER;
     return CLASS_BAND_ORDER[classBand] ?? Number.MAX_SAFE_INTEGER;
+}
+
+function formatClassBandLabel(classBand?: string | null): string {
+    return classBand || "未設定";
 }
 
 function groupAndSortByStartTime<T extends DailyStatusItem>(items: T[]) {
@@ -115,6 +157,23 @@ function groupAndSortTrialParticipantsByStartTime(items: TrialParticipantItem[])
         }));
 }
 
+function groupAndSortNewEnrolleesByStartTime(items: NewEnrolleeItem[]) {
+    const grouped = items.reduce<Record<string, NewEnrolleeItem[]>>((acc, item) => {
+        if (!acc[item.startTime]) acc[item.startTime] = [];
+        acc[item.startTime].push(item);
+        return acc;
+    }, {});
+
+    return Object.keys(grouped).sort((a, b) => a.localeCompare(b)).map((startTime) => ({
+        startTime,
+        items: grouped[startTime].sort((a, b) => {
+            const classBandOrderDiff = getClassBandOrder(a.classBand) - getClassBandOrder(b.classBand);
+            if (classBandOrderDiff !== 0) return classBandOrderDiff;
+            return a.childName.localeCompare(b.childName, "ja");
+        }),
+    }));
+}
+
 function buildDefaultTrialPayload(defaultSlotId = ""): TrialParticipantPayload {
     return {
         participantName: "",
@@ -124,14 +183,24 @@ function buildDefaultTrialPayload(defaultSlotId = ""): TrialParticipantPayload {
     };
 }
 
+function buildDefaultNewEnrolleePayload(defaultJoinedAtISO: string): NewEnrolleePayload {
+    return { childName: "", grade: "", classBand: "", joinedAtISO: defaultJoinedAtISO, courseId: "", sourceTrialParticipantId: null };
+}
+
 export function DailyStatusView() {
     const { toast } = useToast();
     const [selectedDate, setSelectedDate] = useState<Date>(new Date());
     const [isTrialDialogOpen, setIsTrialDialogOpen] = useState(false);
     const [editingTrialParticipant, setEditingTrialParticipant] = useState<TrialParticipantItem | null>(null);
     const [trialPayload, setTrialPayload] = useState<TrialParticipantPayload>(() => buildDefaultTrialPayload());
+    const [isNewEnrolleeDialogOpen, setIsNewEnrolleeDialogOpen] = useState(false);
+    const [editingNewEnrollee, setEditingNewEnrollee] = useState<NewEnrolleeItem | null>(null);
+    const [newEnrolleePayload, setNewEnrolleePayload] = useState<NewEnrolleePayload>(() => buildDefaultNewEnrolleePayload(format(new Date(), "yyyy-MM-dd")));
+    const [trialSearchQuery, setTrialSearchQuery] = useState("");
+    const [hasTouchedTrialSelection, setHasTouchedTrialSelection] = useState(false);
 
     const dateStr = format(selectedDate, "yyyy-MM-dd");
+    const deferredTrialSearchQuery = useDeferredValue(trialSearchQuery.trim());
 
     const { data, isLoading } = useQuery<DailyStatusData>({
         queryKey: ["/api/admin/daily-status", dateStr],
@@ -147,6 +216,17 @@ export function DailyStatusView() {
         queryFn: async () => apiRequest("GET", `/api/admin/daily-lessons?date=${dateStr}`),
     });
 
+    const { data: courses = [], isLoading: isLoadingCourses } = useQuery<Course[]>({
+        queryKey: ["/api/admin/courses"],
+        queryFn: async () => apiRequest("GET", "/api/admin/courses"),
+    });
+
+    const { data: trialSearchResults = [], isFetching: isFetchingTrialSearch } = useQuery<TrialParticipantSearchItem[]>({
+        queryKey: ["/api/admin/trial-participants/search", deferredTrialSearchQuery],
+        queryFn: async () => apiRequest("GET", `/api/admin/trial-participants/search?query=${encodeURIComponent(deferredTrialSearchQuery)}`),
+        enabled: isNewEnrolleeDialogOpen,
+    });
+
     const invalidateDailyQueries = () => {
         queryClient.invalidateQueries({ queryKey: ["/api/admin/daily-status"] });
         queryClient.invalidateQueries({ queryKey: ["/api/admin/daily-lessons"] });
@@ -156,6 +236,14 @@ export function DailyStatusView() {
         setIsTrialDialogOpen(false);
         setEditingTrialParticipant(null);
         setTrialPayload(buildDefaultTrialPayload());
+    };
+
+    const closeNewEnrolleeDialog = () => {
+        setIsNewEnrolleeDialogOpen(false);
+        setEditingNewEnrollee(null);
+        setNewEnrolleePayload(buildDefaultNewEnrolleePayload(dateStr));
+        setTrialSearchQuery("");
+        setHasTouchedTrialSelection(false);
     };
 
     const createTrialParticipantMutation = useMutation({
@@ -215,8 +303,40 @@ export function DailyStatusView() {
         },
     });
 
+    const createNewEnrolleeMutation = useMutation({
+        mutationFn: (payload: NewEnrolleePayload) => apiRequest("POST", "/api/admin/new-enrollees", payload),
+        onSuccess: () => {
+            toast({ title: "登録完了", description: "新規入会者を登録しました。" });
+            invalidateDailyQueries();
+            closeNewEnrolleeDialog();
+        },
+        onError: (error: any) => toast({ title: "登録エラー", description: error.message || "新規入会者の登録に失敗しました。", variant: "destructive" }),
+    });
+
+    const updateNewEnrolleeMutation = useMutation({
+        mutationFn: ({ id, payload }: { id: string; payload: NewEnrolleePayload }) => apiRequest("PUT", `/api/admin/new-enrollees/${id}`, payload),
+        onSuccess: () => {
+            toast({ title: "更新完了", description: "新規入会者情報を更新しました。" });
+            invalidateDailyQueries();
+            closeNewEnrolleeDialog();
+        },
+        onError: (error: any) => toast({ title: "更新エラー", description: error.message || "新規入会者情報の更新に失敗しました。", variant: "destructive" }),
+    });
+
+    const deleteNewEnrolleeMutation = useMutation({
+        mutationFn: (id: string) => apiRequest("DELETE", `/api/admin/new-enrollees/${id}`),
+        onSuccess: () => {
+            toast({ title: "削除完了", description: "新規入会者を削除しました。" });
+            invalidateDailyQueries();
+        },
+        onError: (error: any) => toast({ title: "削除エラー", description: error.message || "新規入会者の削除に失敗しました。", variant: "destructive" }),
+    });
+
     const hasLessonOptions = dailyLessons.length > 0;
+    const hasCourseOptions = courses.length > 0;
+    const dailyNewEnrollees = data?.newEnrollees ?? [];
     const isSavingTrialParticipant = createTrialParticipantMutation.isPending || updateTrialParticipantMutation.isPending;
+    const isSavingNewEnrollee = createNewEnrolleeMutation.isPending || updateNewEnrolleeMutation.isPending;
 
     const openCreateTrialDialog = () => {
         setEditingTrialParticipant(null);
@@ -233,6 +353,22 @@ export function DailyStatusView() {
             slotId: participant.slotId,
         });
         setIsTrialDialogOpen(true);
+    };
+
+    const openCreateNewEnrolleeDialog = () => {
+        setEditingNewEnrollee(null);
+        setNewEnrolleePayload(buildDefaultNewEnrolleePayload(dateStr));
+        setTrialSearchQuery("");
+        setHasTouchedTrialSelection(false);
+        setIsNewEnrolleeDialogOpen(true);
+    };
+
+    const openEditNewEnrolleeDialog = (enrollee: NewEnrolleeItem) => {
+        setEditingNewEnrollee(enrollee);
+        setNewEnrolleePayload({ childName: enrollee.childName, grade: enrollee.grade ?? "", classBand: enrollee.classBand ?? "", joinedAtISO: enrollee.joinedAt, courseId: enrollee.courseId ?? "", sourceTrialParticipantId: null });
+        setTrialSearchQuery("");
+        setHasTouchedTrialSelection(false);
+        setIsNewEnrolleeDialogOpen(true);
     };
 
     const handleSubmitTrialParticipant = () => {
@@ -274,13 +410,47 @@ export function DailyStatusView() {
         }
     };
 
+    const handleSelectTrialParticipant = (value: string) => {
+        setHasTouchedTrialSelection(true);
+        if (value === "none") {
+            setNewEnrolleePayload((prev) => ({ ...prev, sourceTrialParticipantId: null }));
+            return;
+        }
+        const selectedTrial = trialSearchResults.find((participant) => participant.id === value);
+        if (selectedTrial) {
+            setNewEnrolleePayload((prev) => ({ ...prev, childName: selectedTrial.participantName, grade: selectedTrial.grade, classBand: selectedTrial.classBand, sourceTrialParticipantId: selectedTrial.id }));
+        }
+    };
+
+    const handleSubmitNewEnrollee = () => {
+        const childName = newEnrolleePayload.childName.trim();
+        const grade = newEnrolleePayload.grade.trim();
+        const joinedAtISO = newEnrolleePayload.joinedAtISO;
+        const courseId = newEnrolleePayload.courseId;
+        const sourceTrialParticipantId = hasTouchedTrialSelection ? newEnrolleePayload.sourceTrialParticipantId : (editingNewEnrollee?.sourceTrialParticipantId ?? null);
+        if (!childName || !joinedAtISO || !courseId) {
+            toast({ title: "入力エラー", description: "名前・入会日・コースを入力してください。", variant: "destructive" });
+            return;
+        }
+        const payload: NewEnrolleePayload = { childName, grade, classBand: newEnrolleePayload.classBand || null, joinedAtISO, courseId, sourceTrialParticipantId };
+        if (editingNewEnrollee) {
+            updateNewEnrolleeMutation.mutate({ id: editingNewEnrollee.id, payload });
+        } else {
+            createNewEnrolleeMutation.mutate(payload);
+        }
+    };
+
+    const handleDeleteNewEnrollee = (enrollee: NewEnrolleeItem) => {
+        if (confirm(`${enrollee.childName}さんの新規入会者表示を削除しますか？`)) deleteNewEnrolleeMutation.mutate(enrollee.id);
+    };
+
     return (
         <div className="space-y-6">
             <Card className="border-2">
                 <CardHeader>
-                    <CardTitle className="text-xl">本日の欠席・遅刻・振替・体験者</CardTitle>
+                    <CardTitle className="text-xl">本日の欠席・遅刻・振替・体験者・新規入会者</CardTitle>
                     <p className="text-sm text-muted-foreground">
-                        日付を選択して、その日の欠席者・遅刻者・振替者・体験者を確認できます
+                        日付を選択して、その日の欠席者・遅刻者・振替者・体験者・新規入会者を確認できます。新規入会者は登録コースの曜日に、入会日以降4回分を自動表示します。
                     </p>
                 </CardHeader>
                 <CardContent>
@@ -300,15 +470,14 @@ export function DailyStatusView() {
                                 <h3 className="text-lg font-bold">
                                     {format(selectedDate, "yyyy年M月d日(E)", { locale: ja })}
                                 </h3>
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    onClick={openCreateTrialDialog}
-                                    disabled={!hasLessonOptions || isSavingTrialParticipant}
-                                >
-                                    <PlusIcon className="w-4 h-4 mr-1" />
-                                    体験者を追加
-                                </Button>
+                                <div className="flex flex-wrap gap-2">
+                                    <Button type="button" size="sm" onClick={openCreateTrialDialog} disabled={!hasLessonOptions || isSavingTrialParticipant}>
+                                        <PlusIcon className="w-4 h-4 mr-1" />体験者を追加
+                                    </Button>
+                                    <Button type="button" size="sm" variant="outline" onClick={openCreateNewEnrolleeDialog} disabled={isLoadingCourses || !hasCourseOptions || isSavingNewEnrollee}>
+                                        <PlusIcon className="w-4 h-4 mr-1" />新規入会者を追加
+                                    </Button>
+                                </div>
                             </div>
 
                             {!hasLessonOptions && (
@@ -317,12 +486,18 @@ export function DailyStatusView() {
                                 </p>
                             )}
 
+                            {!isLoadingCourses && !hasCourseOptions && (
+                                <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                                    コースが未登録のため、新規入会者を登録できません。先にコースを登録してください。
+                                </p>
+                            )}
+
                             {isLoading ? (
                                 <div className="flex justify-center py-8">
                                     <Loader2 className="w-8 h-8 animate-spin text-primary" />
                                 </div>
                             ) : (
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
                                     <Card className="border-destructive/30">
                                         <CardHeader className="pb-3">
                                             <CardTitle className="text-base flex items-center gap-2 text-destructive">
@@ -485,6 +660,43 @@ export function DailyStatusView() {
                                             )}
                                         </CardContent>
                                     </Card>
+
+                                    <Card className="border-sky-300/70">
+                                        <CardHeader className="pb-3">
+                                            <CardTitle className="text-base flex items-center gap-2 text-sky-700">
+                                                <UsersIcon className="w-5 h-5" />新規入会者
+                                                <span className="ml-auto text-2xl font-bold">{dailyNewEnrollees.length}</span>
+                                                <span className="text-sm font-normal">名</span>
+                                            </CardTitle>
+                                        </CardHeader>
+                                        <CardContent>
+                                            {dailyNewEnrollees.length === 0 ? <p className="text-sm text-muted-foreground text-center py-4">新規入会者はいません</p> : (
+                                                <div className="space-y-2">
+                                                    {groupAndSortNewEnrolleesByStartTime(dailyNewEnrollees).map((group) => (
+                                                        <div key={group.startTime} className="border-2 rounded-lg overflow-hidden">
+                                                            <div className="px-3 py-2 bg-sky-100/70 border-b"><p className="text-sm font-semibold">{group.startTime}</p></div>
+                                                            <div className="divide-y">
+                                                                {group.items.map((enrollee) => (
+                                                                    <div key={enrollee.id} className="p-3 bg-sky-50/70 flex items-start justify-between gap-2">
+                                                                        <div>
+                                                                            <p className="font-semibold">{enrollee.childName}</p>
+                                                                            <p className="text-sm text-muted-foreground">学年: {enrollee.grade || "未設定"}</p>
+                                                                            <p className="text-sm text-muted-foreground">入会日: {enrollee.joinedAt}</p>
+                                                                            <p className="text-sm text-muted-foreground">{enrollee.courseName} （{formatClassBandLabel(enrollee.classBand)}）</p>
+                                                                        </div>
+                                                                        <div className="flex items-center gap-1">
+                                                                            <Button type="button" variant="ghost" size="sm" aria-label={`${enrollee.childName}を編集`} onClick={() => openEditNewEnrolleeDialog(enrollee)} disabled={isSavingNewEnrollee}><PencilIcon className="w-4 h-4" /></Button>
+                                                                            <Button type="button" variant="ghost" size="sm" aria-label={`${enrollee.childName}を削除`} onClick={() => handleDeleteNewEnrollee(enrollee)} disabled={deleteNewEnrolleeMutation.isPending} className="text-destructive hover:text-destructive"><TrashIcon className="w-4 h-4" /></Button>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </CardContent>
+                                    </Card>
                                 </div>
                             )}
                         </div>
@@ -593,6 +805,39 @@ export function DailyStatusView() {
                             {isSavingTrialParticipant && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                             {editingTrialParticipant ? "更新する" : "登録する"}
                         </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={isNewEnrolleeDialogOpen} onOpenChange={(open) => open ? setIsNewEnrolleeDialogOpen(true) : closeNewEnrolleeDialog()}>
+                <DialogContent className="sm:max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>{editingNewEnrollee ? "新規入会者情報を編集" : "新規入会者を追加"}</DialogTitle>
+                        <DialogDescription>入会日・名前・コースを入力し、必要なら体験者から自動入力できます。登録コースの曜日に、入会日以降4回分を自動表示します。</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="trial-search-query">体験者を検索（任意）</Label>
+                            <Input id="trial-search-query" value={trialSearchQuery} onChange={(e) => setTrialSearchQuery(e.target.value)} placeholder="名前で検索" />
+                            <Select value={hasTouchedTrialSelection ? (newEnrolleePayload.sourceTrialParticipantId ?? "none") : "none"} onValueChange={handleSelectTrialParticipant}>
+                                <SelectTrigger><SelectValue placeholder="体験者から選択（任意）" /></SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="none">選択しない</SelectItem>
+                                    {trialSearchResults.map((participant) => <SelectItem key={participant.id} value={participant.id}>{participant.participantName} / {participant.slotDate} {participant.startTime} {participant.courseLabel}（{participant.classBand}）</SelectItem>)}
+                                </SelectContent>
+                            </Select>
+                            {isFetchingTrialSearch && <p className="text-sm text-muted-foreground">体験者を検索しています...</p>}
+                            {!isFetchingTrialSearch && trialSearchQuery.trim() && trialSearchResults.length === 0 && <p className="text-sm text-muted-foreground">一致する体験者がいません。</p>}
+                        </div>
+                        <div className="space-y-2"><Label htmlFor="new-enrollee-name">名前</Label><Input id="new-enrollee-name" value={newEnrolleePayload.childName} onChange={(e) => setNewEnrolleePayload((prev) => ({ ...prev, childName: e.target.value }))} placeholder="例: さとう はな" /></div>
+                        <div className="space-y-2"><Label htmlFor="new-enrollee-grade">学年</Label><Input id="new-enrollee-grade" value={newEnrolleePayload.grade} onChange={(e) => setNewEnrolleePayload((prev) => ({ ...prev, grade: e.target.value }))} placeholder="例: 小学3年" /></div>
+                        <div className="space-y-2"><Label>クラス帯</Label><Select value={newEnrolleePayload.classBand || "none"} onValueChange={(value) => setNewEnrolleePayload((prev) => ({ ...prev, classBand: value === "none" ? "" : value }))}><SelectTrigger><SelectValue placeholder="クラス帯を選択" /></SelectTrigger><SelectContent><SelectItem value="none">未設定</SelectItem>{CLASS_BAND_OPTIONS.map((classBand) => <SelectItem key={classBand} value={classBand}>{classBand}</SelectItem>)}</SelectContent></Select></div>
+                        <div className="space-y-2"><Label htmlFor="new-enrollee-joined-at">入会日</Label><Input id="new-enrollee-joined-at" type="date" value={newEnrolleePayload.joinedAtISO} onChange={(e) => setNewEnrolleePayload((prev) => ({ ...prev, joinedAtISO: e.target.value }))} /></div>
+                        <div className="space-y-2"><Label>登録コース</Label><Select value={newEnrolleePayload.courseId || undefined} onValueChange={(value) => setNewEnrolleePayload((prev) => ({ ...prev, courseId: value }))} disabled={isLoadingCourses || !hasCourseOptions}><SelectTrigger><SelectValue placeholder="コースを選択" /></SelectTrigger><SelectContent>{courses.map((course) => <SelectItem key={course.id} value={course.id}>{course.name} ({course.dayOfWeek} {course.startTime}){course.isActive ? "" : " [停止中]"}</SelectItem>)}</SelectContent></Select></div>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                        <Button type="button" variant="outline" onClick={closeNewEnrolleeDialog} disabled={isSavingNewEnrollee}>キャンセル</Button>
+                        <Button type="button" onClick={handleSubmitNewEnrollee} disabled={isLoadingCourses || !hasCourseOptions || isSavingNewEnrollee}>{isSavingNewEnrollee && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}{editingNewEnrollee ? "更新する" : "登録する"}</Button>
                     </div>
                 </DialogContent>
             </Dialog>

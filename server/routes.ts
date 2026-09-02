@@ -19,11 +19,13 @@ import {
   updateCourseRequestSchema,
   createTrialParticipantRequestSchema,
   updateTrialParticipantRequestSchema,
+  createNewEnrolleeRequestSchema,
+  updateNewEnrolleeRequestSchema,
   updateClosureEventSlotsRequestSchema,
   validateClosureCodeRequestSchema,
   redeemClosureCodeRequestSchema,
 } from "@shared/schema";
-import type { BookRequest } from "@shared/schema";
+import type { BookRequest, InsertNewEnrollee } from "@shared/schema";
 import { sendConfirmationEmail, sendExpiredEmail, sendAbsenceConfirmationEmail, sendMakeupConfirmationEmail, sendCancellationEmail, sendRequestCancellationEmail } from "./email-service";
 import { createId } from "@paralleldrive/cuid2";
 import { format, addDays } from "date-fns";
@@ -161,6 +163,89 @@ function requireCoach(req: Request, res: Response, next: NextFunction) {
   } else {
     res.status(401).json({ error: "コーチ認証が必要です" });
   }
+}
+
+function normalizeOptionalAdminField(value?: string | null): string | null | undefined {
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+async function buildNewEnrolleeCreateData(input: {
+  childName: string;
+  grade?: string | null;
+  classBand?: string | null;
+  joinedAtISO: string;
+  courseId: string;
+  sourceTrialParticipantId?: string | null;
+}): Promise<InsertNewEnrollee> {
+  const course = await storage.getCourseById(input.courseId);
+  if (!course) {
+    throw new Error("COURSE_NOT_FOUND");
+  }
+
+  const sourceTrialParticipantId = normalizeOptionalAdminField(input.sourceTrialParticipantId);
+  if (sourceTrialParticipantId) {
+    const trialParticipant = await storage.getTrialParticipantById(sourceTrialParticipantId);
+    if (!trialParticipant) {
+      throw new Error("TRIAL_PARTICIPANT_NOT_FOUND");
+    }
+  }
+
+  return {
+    childName: input.childName.trim(),
+    grade: normalizeOptionalAdminField(input.grade) ?? null,
+    classBand: input.classBand ?? null,
+    joinedAt: parseJstDate(input.joinedAtISO),
+    courseId: course.id,
+    courseNameSnapshot: course.name.trim(),
+    targetDayOfWeek: course.dayOfWeek,
+    targetStartTime: course.startTime,
+    sourceTrialParticipantId: sourceTrialParticipantId ?? null,
+  };
+}
+
+async function buildNewEnrolleeUpdateData(input: {
+  childName?: string;
+  grade?: string | null;
+  classBand?: string | null;
+  joinedAtISO?: string;
+  courseId?: string;
+  sourceTrialParticipantId?: string | null;
+}): Promise<Partial<InsertNewEnrollee>> {
+  const data: Partial<InsertNewEnrollee> = {};
+
+  if (input.childName !== undefined) data.childName = input.childName.trim();
+  if (input.grade !== undefined) data.grade = normalizeOptionalAdminField(input.grade) ?? null;
+  if (input.classBand !== undefined) data.classBand = input.classBand ?? null;
+  if (input.joinedAtISO !== undefined) data.joinedAt = parseJstDate(input.joinedAtISO);
+
+  if (input.courseId !== undefined) {
+    const course = await storage.getCourseById(input.courseId);
+    if (!course) {
+      throw new Error("COURSE_NOT_FOUND");
+    }
+    data.courseId = course.id;
+    data.courseNameSnapshot = course.name.trim();
+    data.targetDayOfWeek = course.dayOfWeek;
+    data.targetStartTime = course.startTime;
+  }
+
+  if (input.sourceTrialParticipantId !== undefined) {
+    const sourceTrialParticipantId = normalizeOptionalAdminField(input.sourceTrialParticipantId);
+    if (sourceTrialParticipantId) {
+      const trialParticipant = await storage.getTrialParticipantById(sourceTrialParticipantId);
+      if (!trialParticipant) {
+        throw new Error("TRIAL_PARTICIPANT_NOT_FOUND");
+      }
+    }
+    data.sourceTrialParticipantId = sourceTrialParticipantId ?? null;
+  }
+
+  return data;
 }
 
 async function getClassSlotByExactId(executor: any, slotId: string) {
@@ -364,14 +449,30 @@ type DailyStatusTrialParticipant = {
   startTime: string;
 };
 
+type DailyStatusNewEnrollee = {
+  id: string;
+  childName: string;
+  grade: string | null;
+  classBand: string | null;
+  joinedAt: string;
+  courseId: string | null;
+  courseName: string;
+  startTime: string;
+  sourceTrialParticipantId: string | null;
+};
+
 type DailyStatusData = {
   date: string;
   absentees: DailyStatusAbsentee[];
   makeups: DailyStatusMakeup[];
   trialParticipants: DailyStatusTrialParticipant[];
+  newEnrollees: DailyStatusNewEnrollee[];
 };
 
-async function getDailyStatusForDate(targetDate: Date): Promise<DailyStatusData> {
+async function getDailyStatusForDate(
+  targetDate: Date,
+  options: { includeNewEnrollees?: boolean } = {},
+): Promise<DailyStatusData> {
   const slots = await storage.getClassSlotsByDate(targetDate);
   const absentees: DailyStatusAbsentee[] = [];
   const makeups: DailyStatusMakeup[] = [];
@@ -409,6 +510,19 @@ async function getDailyStatusForDate(targetDate: Date): Promise<DailyStatusData>
     classBand: participant.classBand,
     startTime: participant.startTime,
   }));
+  const newEnrollees = options.includeNewEnrollees
+    ? (await storage.getNewEnrolleesVisibleOnDate(targetDate)).map((enrollee) => ({
+        id: enrollee.id,
+        childName: enrollee.childName,
+        grade: enrollee.grade,
+        classBand: enrollee.classBand,
+        joinedAt: formatJstDate(enrollee.joinedAt),
+        courseId: enrollee.courseId,
+        courseName: enrollee.courseNameSnapshot,
+        startTime: enrollee.targetStartTime,
+        sourceTrialParticipantId: enrollee.sourceTrialParticipantId,
+      }))
+    : [];
 
   const sortByTimeAndName = (a: { startTime: string; childName: string }, b: { startTime: string; childName: string }) => {
     const timeCompare = a.startTime.localeCompare(b.startTime);
@@ -423,12 +537,14 @@ async function getDailyStatusForDate(targetDate: Date): Promise<DailyStatusData>
     if (timeCompare !== 0) return timeCompare;
     return a.participantName.localeCompare(b.participantName, "ja");
   });
+  newEnrollees.sort(sortByTimeAndName);
 
   return {
     date: formatJstDate(targetDate),
     absentees,
     makeups,
     trialParticipants,
+    newEnrollees,
   };
 }
 
@@ -1954,7 +2070,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/admin/daily-status", requireAdmin, async (req, res) => {
     try {
       const targetDate = resolveDailyStatusDate(req.query.date);
-      res.json(await getDailyStatusForDate(targetDate));
+      res.json(await getDailyStatusForDate(targetDate, { includeNewEnrollees: true }));
     } catch (error: any) {
       if (error.message === "DAILY_STATUS_DATE_INVALID") {
         return res.status(400).json({ error: "dateはYYYY-MM-DD形式の有効な日付で指定してください" });
@@ -1997,6 +2113,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       console.error("Coach daily status error:", error);
       res.status(500).json({ error: "日別状況の取得に失敗しました" });
+    }
+  });
+
+  app.get("/api/admin/trial-participants/search", requireAdmin, async (req, res) => {
+    try {
+      const query = typeof req.query.query === "string" ? req.query.query : "";
+      const results = await storage.searchTrialParticipants(query, 20);
+
+      res.json(results.map((participant) => ({
+        id: participant.id,
+        participantName: participant.participantName,
+        grade: participant.grade,
+        swimLevel: participant.swimLevel,
+        slotId: participant.slotId,
+        slotDate: formatJstDate(participant.slotDate),
+        startTime: participant.startTime,
+        courseLabel: participant.courseLabel,
+        classBand: participant.classBand,
+      })));
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   });
 
@@ -2054,6 +2191,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json({ success: true, message: "体験者情報を削除しました。" });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/admin/new-enrollees", requireAdmin, async (req, res) => {
+    try {
+      const data = createNewEnrolleeRequestSchema.parse(req.body);
+      const created = await storage.createNewEnrollee(await buildNewEnrolleeCreateData(data));
+      res.json({ success: true, newEnrollee: created });
+    } catch (error: any) {
+      if (error.message === "COURSE_NOT_FOUND") {
+        return res.status(400).json({ error: "指定されたコースが見つかりません。" });
+      }
+      if (error.message === "TRIAL_PARTICIPANT_NOT_FOUND") {
+        return res.status(400).json({ error: "指定された体験者が見つかりません。" });
+      }
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.put("/api/admin/new-enrollees/:id", requireAdmin, async (req, res) => {
+    try {
+      const data = updateNewEnrolleeRequestSchema.parse(req.body);
+      const existing = await storage.getNewEnrolleeById(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: "指定された新規入会者が見つかりません。" });
+      }
+
+      const updated = await storage.updateNewEnrollee(
+        req.params.id,
+        await buildNewEnrolleeUpdateData(data),
+      );
+      if (!updated) {
+        return res.status(404).json({ error: "指定された新規入会者が見つかりません。" });
+      }
+      res.json({ success: true, newEnrollee: updated });
+    } catch (error: any) {
+      if (error.message === "COURSE_NOT_FOUND") {
+        return res.status(400).json({ error: "指定されたコースが見つかりません。" });
+      }
+      if (error.message === "TRIAL_PARTICIPANT_NOT_FOUND") {
+        return res.status(400).json({ error: "指定された体験者が見つかりません。" });
+      }
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/admin/new-enrollees/:id", requireAdmin, async (req, res) => {
+    try {
+      const deleted = await storage.deleteNewEnrollee(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ error: "指定された新規入会者が見つかりません。" });
+      }
+      res.json({ success: true, message: "新規入会者を削除しました。" });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
