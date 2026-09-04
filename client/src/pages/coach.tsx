@@ -7,6 +7,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ExpandableReason } from "@/components/ExpandableReason";
 import { Loader2, LogOutIcon, UserCheckIcon, UserPlusIcon, UserXIcon } from "lucide-react";
 import { AdminLoginForm } from "@/components/admin";
 import type { StaffRole } from "@/components/admin/types";
@@ -17,6 +18,7 @@ type CoachDailyAbsentee = {
   classBand: string;
   startTime: string;
   reportType: "ABSENCE" | "LATE";
+  reason: string | null;
 };
 
 type CoachDailyMakeup = {
@@ -45,6 +47,7 @@ type CoachStatusItem = {
   classBand: string;
   startTime: string;
   detail?: string;
+  reason?: string | null;
   badge?: string;
   badgeClassName?: string;
 };
@@ -114,10 +117,11 @@ function StatusSection({
                     {group.items.map((item, index) => (
                       <div
                         key={`${group.startTime}-${item.name}-${index}`}
-                        className={`flex items-center justify-between gap-3 p-3 ${colors.itemClassName}`}
+                        className={`flex items-start justify-between gap-3 p-3 ${colors.itemClassName}`}
                       >
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="font-medium">{item.name}</p>
+                          <ExpandableReason reason={item.reason} />
                           {item.detail && <p className="text-xs text-muted-foreground">{item.detail}</p>}
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
@@ -211,6 +215,7 @@ export default function CoachPage() {
     name: item.childName,
     classBand: item.classBand,
     startTime: item.startTime,
+    reason: item.reason,
     badge: item.reportType === "LATE" ? "遅刻" : "欠席",
     badgeClassName: getReportTypeBadgeStyle(item.reportType),
   }));

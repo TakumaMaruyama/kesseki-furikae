@@ -23,6 +23,7 @@
     "slots:repair-attendance": "tsx scripts/repair-attendance-consistency.ts",
     "parent:verify-slot-calendar": "tsx scripts/verify-parent-slot-calendar.ts",
     "ui:verify-slot-form": "tsx scripts/verify-slot-form-ux.ts",
+    "ui:verify-daily-status-reasons": "tsx scripts/verify-daily-status-reasons.ts",
     "server:verify-error-handler": "tsx scripts/verify-error-handler.ts",
     "security:verify": "tsx scripts/verify-security-hardening.ts"
   },

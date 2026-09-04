@@ -429,6 +429,7 @@ type DailyStatusAbsentee = {
   classBand: string;
   startTime: string;
   reportType: "ABSENCE" | "LATE";
+  reason: string | null;
 };
 
 type DailyStatusMakeup = {
@@ -486,6 +487,7 @@ async function getDailyStatusForDate(
         classBand: slot.classBand,
         startTime: slot.startTime,
         reportType: absence.reportType as "ABSENCE" | "LATE",
+        reason: absence.reason,
       });
     }
 
@@ -2080,7 +2082,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Coach: read-only daily status projection without course, slot, or private fields.
+  // Coach: read-only daily status projection without course, slot, contact, or action-token fields.
   app.get("/api/coach/daily-status", requireCoach, async (req, res) => {
     try {
       const targetDate = resolveDailyStatusDate(req.query.date);
@@ -2088,11 +2090,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({
         date: dailyStatus.date,
-        absentees: dailyStatus.absentees.map(({ childName, classBand, startTime, reportType }) => ({
+        absentees: dailyStatus.absentees.map(({ childName, classBand, startTime, reportType, reason }) => ({
           childName,
           classBand,
           startTime,
           reportType,
+          reason,
         })),
         makeups: dailyStatus.makeups.map(({ childName, classBand, startTime }) => ({
           childName,

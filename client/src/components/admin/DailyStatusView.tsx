@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Calendar } from "@/components/ui/calendar";
+import { ExpandableReason } from "@/components/ExpandableReason";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Loader2, UserX, UserCheck, UserIcon, PlusIcon, PencilIcon, TrashIcon, UsersIcon } from "lucide-react";
@@ -23,6 +24,7 @@ interface DailyStatusItem {
 
 interface DailyAbsenceItem extends DailyStatusItem {
     reportType: "ABSENCE" | "LATE";
+    reason: string | null;
 }
 
 interface TrialParticipantItem {
@@ -533,6 +535,7 @@ export function DailyStatusView() {
                                                                                 {getReportTypeLabel(item.reportType)}
                                                                             </span>
                                                                         </div>
+                                                                        <ExpandableReason reason={item.reason} />
                                                                         <p className="text-sm text-muted-foreground">
                                                                             {item.courseLabel} （{item.classBand}）
                                                                         </p>
