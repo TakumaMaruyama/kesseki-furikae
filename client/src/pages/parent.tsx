@@ -849,6 +849,10 @@ export default function ParentPage() {
       </header>
 
       <main className="container max-w-2xl px-4 py-8 md:py-12 space-y-8">
+        <a href="/transport" className="block rounded-lg border border-primary/30 bg-primary/5 p-4 text-primary" data-testid="transport-entry">
+          <span className="font-semibold">出席するけれど、送迎を利用しない方へ</span>
+          <span className="mt-1 block text-sm">その日だけの「行き不要・帰り不要・往復不要」を連絡</span>
+        </a>
         {showEmailNoticeBanner && (
           <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4" data-testid="email-feature-notice">
             <p className="mb-1 text-sm font-semibold text-yellow-800">重要なお知らせ</p>

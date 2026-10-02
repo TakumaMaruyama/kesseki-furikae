@@ -68,6 +68,7 @@ import {
 } from "./confirmCode";
 import { getAdminAbsenceHistory, getAdminRequestHistory } from "./adminHistory";
 import { toPublicLookupAbsence, toPublicLookupRequest } from "./publicLookup";
+import { registerTransportRoutes } from "./transport";
 
 
 const ADMIN_HISTORY_MONTH_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])$/;
@@ -163,6 +164,11 @@ function requireCoach(req: Request, res: Response, next: NextFunction) {
   } else {
     res.status(401).json({ error: "コーチ認証が必要です" });
   }
+}
+
+function requireStaff(req: Request, res: Response, next: NextFunction) {
+  if (getStaffRole(req)) next();
+  else res.status(401).json({ error: "スタッフ認証が必要です" });
 }
 
 function normalizeOptionalAdminField(value?: string | null): string | null | undefined {
@@ -1422,6 +1428,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       },
     })
   );
+
+  registerTransportRoutes(app, requireAdmin, requireStaff);
 
   // Successful logins do not consume this limit; failed attempts do.
   const adminLoginLimiter = rateLimit({

@@ -25,7 +25,14 @@
     "ui:verify-slot-form": "tsx scripts/verify-slot-form-ux.ts",
     "ui:verify-daily-status-reasons": "tsx scripts/verify-daily-status-reasons.ts",
     "server:verify-error-handler": "tsx scripts/verify-error-handler.ts",
-    "security:verify": "tsx scripts/verify-security-hardening.ts"
+    "security:verify": "tsx scripts/verify-security-hardening.ts",
+    "test:regression": "node scripts/run-regression.mjs",
+    "test:regression:existing": "node scripts/run-regression.mjs existing",
+    "test:regression:api": "node scripts/run-regression.mjs api",
+    "test:regression:e2e": "node scripts/run-regression.mjs e2e",
+    "test:regression:typecheck": "tsc -p tests/regression/tsconfig.json",
+    "test:regression:transport": "node scripts/run-regression.mjs transport",
+    "transport:migration:generate": "tsx scripts/generate-transport-migration.ts"
   },
   "overrides": {
     "minimatch": "10.2.5",
@@ -149,7 +156,9 @@
     "tsx": "^4.20.5",
     "typescript": "5.6.3",
     "vite": "^6.4.3",
-    "vite-plugin-pwa": "^1.2.0"
+    "vite-plugin-pwa": "^1.2.0",
+    "embedded-postgres": "16.14.0-beta.17",
+    "@playwright/test": "1.62.1"
   },
   "optionalDependencies": {
     "bufferutil": "^4.0.8"
