@@ -941,7 +941,7 @@ type CancelAbsenceResult = {
 
 async function cancelAbsenceWithRelated(absenceId: string, options: CancelAbsenceOptions): Promise<CancelAbsenceResult> {
   return db.transaction(async (tx) => {
-    const [absence] = await tx.select().from(absences).where(eq(absences.id, absenceId));
+    const [absence] = await tx.select().from(absences).where(eq(absences.id, absenceId)).for("update");
     if (!absence) {
       throw new Error("NOT_FOUND_ABSENCE");
     }
@@ -997,7 +997,8 @@ async function cancelAbsenceWithRelated(absenceId: string, options: CancelAbsenc
       };
     }
 
-    const relatedRequests = await tx.select().from(requests).where(eq(requests.absenceId, absence.id));
+    const relatedRequests = await tx.select().from(requests)
+      .where(eq(requests.absenceId, absence.id)).orderBy(asc(requests.id)).for("update");
     for (const request of relatedRequests) {
       if (request.status === "確定") {
         const requestSlotRef = await resolveRequestSlotReference(tx, request);
@@ -1058,7 +1059,19 @@ type CancelRequestResult = {
 
 async function cancelRequestUnified(requestId: string): Promise<CancelRequestResult> {
   return db.transaction(async (tx) => {
-    const [request] = await tx.select().from(requests).where(eq(requests.id, requestId));
+    const [reference] = await tx.select({ absenceId: requests.absenceId })
+      .from(requests).where(eq(requests.id, requestId));
+    if (!reference) {
+      throw new Error("NOT_FOUND_REQUEST");
+    }
+
+    // Match absence cancellation's lock order: absence -> request -> slots.
+    // Read the booking status only after locking, so retries see the committed cancellation.
+    if (reference.absenceId) {
+      await tx.select({ id: absences.id }).from(absences)
+        .where(eq(absences.id, reference.absenceId)).for("update");
+    }
+    const [request] = await tx.select().from(requests).where(eq(requests.id, requestId)).for("update");
     if (!request) {
       throw new Error("NOT_FOUND_REQUEST");
     }
