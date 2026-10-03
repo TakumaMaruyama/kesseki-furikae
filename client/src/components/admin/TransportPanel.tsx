@@ -28,8 +28,8 @@ export default function TransportPanel({ readOnly = false }: { readOnly?: boolea
         {notices.isLoading && <p role="status">読み込み中…</p>}
         {notices.data?.length === 0 && <p>この日の連絡はありません。</p>}
         {(notices.data || []).map((item) => <article key={item.id} className="rounded-lg border p-4 space-y-2" data-testid={`staff-transport-${item.profileId}`}>
-          <div className="flex flex-wrap justify-between gap-2"><h3 className="font-bold">{item.childName} · {item.classBand}</h3><Badge variant={item.status === "CANCELLED" ? "outline" : "default"}>{item.status === "CANCELLED" ? "取消済み" : directionLabels[item.direction]}</Badge></div>
-          <p>{item.serviceDate} のみ {item.lessonTime && `· レッスン ${item.lessonTime}`}</p>
+          <div className="flex flex-wrap justify-between gap-2"><h3 className="font-bold">{item.childName}</h3><Badge variant={item.status === "CANCELLED" ? "outline" : "default"}>{item.status === "CANCELLED" ? "取消済み" : directionLabels[item.direction]}</Badge></div>
+          <p>{item.serviceDate} のみ {item.lessonTime && `· レッスン ${item.lessonTime}`} {item.lessonLabel}</p>
           <p className="text-sm">{item.selfSubmitted && "保護者入力 · "}{item.status === "CANCELLED" ? `${directionLabels[item.direction]}の連絡を取り消しました。通常の送迎予定を確認してください。` : "レッスンには出席予定です。"}</p>
           {item.attendanceWarning && <p className="text-destructive font-semibold" role="alert">出席予定の再確認が必要：{item.attendanceWarning}</p>}
           {item.note && <p className="whitespace-pre-wrap break-words">補足：{item.note}</p>}

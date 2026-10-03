@@ -21,7 +21,8 @@ export const transportNoticeSchema = z.object({
 // response can be retried without creating a second notice. It is a bearer secret.
 export const transportSubmissionSchema = z.object({
   childName: z.string().trim().min(1).max(80).regex(/^[ぁ-ゖー 　]+$/, "名前はひらがなで入力してください"),
-  classBand: z.enum(["初級", "中級", "上級"]),
+  // Accept already-open older forms; new forms derive this from the lesson.
+  classBand: z.enum(["初級", "中級", "上級"]).optional(),
   serviceDate: transportDateSchema,
   slotId: z.string().min(1).max(200),
   direction: z.enum(["OUTBOUND", "INBOUND", "BOTH"]),
@@ -40,10 +41,12 @@ export type TransportNoticeView = {
 };
 export type TransportDay = {
   eligible: boolean; reason: string | null; lessonTime: string | null;
+  lessonLabel?: string | null;
   editable: boolean; deadlineAt: string | null; editingReason: string | null;
   today: string; notice: TransportNoticeView | null;
 };
 export type StaffTransportNotice = TransportNoticeView & {
   childName: string; classBand: string; lessonTime: string | null; attendanceWarning: string | null;
+  lessonLabel?: string | null;
   selfSubmitted?: boolean;
 };

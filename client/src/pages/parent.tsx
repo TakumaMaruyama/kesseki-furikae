@@ -849,10 +849,6 @@ export default function ParentPage() {
       </header>
 
       <main className="container max-w-2xl px-4 py-8 md:py-12 space-y-8">
-        <a href="/transport" className="block rounded-lg border border-primary/30 bg-primary/5 p-4 text-primary" data-testid="transport-entry">
-          <span className="font-semibold">出席するけれど、送迎を利用しない方へ</span>
-          <span className="mt-1 block text-sm">その日だけの「行き不要・帰り不要・往復不要」を連絡</span>
-        </a>
         {showEmailNoticeBanner && (
           <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4" data-testid="email-feature-notice">
             <p className="mb-1 text-sm font-semibold text-yellow-800">重要なお知らせ</p>
@@ -865,12 +861,12 @@ export default function ParentPage() {
             <Card className="border-2 border-primary/20 bg-primary/5">
               <CollapsibleTrigger className="w-full">
                 <CardHeader className="cursor-pointer hover:bg-primary/10 transition-colors">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-base sm:text-lg md:text-xl font-bold flex items-center gap-2 whitespace-nowrap">
-                      <InfoIcon className="w-5 h-5 text-primary" />
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="min-w-0 text-left text-base sm:text-lg md:text-xl font-bold flex items-center gap-2">
+                      <InfoIcon className="w-5 h-5 shrink-0 text-primary" />
                       はじめての方へ - システムの使い方
                     </h2>
-                    <ChevronDownIcon className="w-5 h-5 text-primary transition-transform duration-200 group-data-[state=open]:rotate-180" />
+                    <ChevronDownIcon className="w-5 h-5 shrink-0 text-primary transition-transform duration-200 group-data-[state=open]:rotate-180" />
                   </div>
                 </CardHeader>
               </CollapsibleTrigger>
@@ -910,6 +906,11 @@ export default function ParentPage() {
             </Card>
           </Collapsible>
         )}
+
+        <a href="/transport" className="block rounded-lg border bg-card p-4" data-testid="transport-entry">
+          <span className="font-semibold text-primary">送迎不要の連絡</span>
+          <span className="mt-1 block text-sm text-muted-foreground" data-testid="transport-entry-description">出席する日の送迎を使わないとき</span>
+        </a>
 
         <section>
           <div className="mb-4">

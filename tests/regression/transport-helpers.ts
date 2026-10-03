@@ -32,7 +32,7 @@ export async function attendanceSnapshot(school: SchoolFixture) {
 
 export async function selfSubmission(school: SchoolFixture, overrides = {}, cookie?: string) {
   const { randomBytes } = await import("node:crypto");
-  const input = { childName: CHILD_A, classBand: "初級", serviceDate: school.dates.original,
+  const input = { childName: CHILD_A, serviceDate: school.dates.original,
     slotId: school.ids.original, direction: "OUTBOUND", note: "保護者が送ります",
     receiptCode: "R-" + randomBytes(18).toString("base64url"), ...overrides };
   const response = await school.api("/api/transport/submissions", input, cookie);

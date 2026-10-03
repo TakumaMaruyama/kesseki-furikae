@@ -1,6 +1,6 @@
 # 欠席・振替アプリの回帰テスト
 
-送迎不要連絡を欠席連絡と同じ直接入力へ変更し、学校でのコード発行を不要にした最新状態は **全70ケース成功**（既存9・欠席/振替API24・送迎API21・ブラウザ16）。追加機能、マイグレーション、画面証跡、運用判断は [TRANSPORT.md](./TRANSPORT.md)、公開状況は [RELEASE.md](./RELEASE.md) を参照。下段の41件の表は送迎追加前の取消修正時点の記録。
+送迎不要連絡のクラス帯入力・表示を外し、入口を「はじめての方へ」の下に整理した最新状態は **全74ケース成功**（既存9・欠席/振替API24・送迎API23・ブラウザ18）。追加機能、マイグレーション、画面証跡、運用判断は [TRANSPORT.md](./TRANSPORT.md)、公開状況は [RELEASE.md](./RELEASE.md) を参照。下段の41件の表は送迎追加前の取消修正時点の記録。
 
 対象ソース: `/Users/brest/Documents/ChatGPT/欠席・振替` の `a466cc412ae38448d2f199db32c3ff9719f8ab32`（`codex/integrate-replit-security`）。
 2026-10-02にソースだけを独立コピーし、`test/school-regression-20261002` ブランチで作成した。元チェックアウト、共通ログイン統合作業、パーソナル予約、動画プロジェクトは変更していない。
@@ -38,7 +38,7 @@ npm run test:regression:api -- --test-name-pattern="simultaneous cancellation"
 npm run test:regression:api -- --test-name-pattern="cancellation"
 ```
 
-`test:regression` は既存検証、欠席/振替API、送迎API、ブラウザを順に実行し、途中の失敗後も残りの結果を収集する。1件でも失敗したら終了コード1になる。最新の全体結果は、各スイートを個別実行して合計70成功・失敗0・skip 0、各終了コード0。欠席/振替APIを `cancellation` で絞ると通常の取消・兄弟分離と7つの競合/再試行ケースの計9件を実行する。
+`test:regression` は既存検証、欠席/振替API、送迎API、ブラウザを順に実行し、途中の失敗後も残りの結果を収集する。1件でも失敗したら終了コード1になる。最新の全体結果は、各スイートを個別実行して合計74成功・失敗0・skip 0、各終了コード0。欠席/振替APIを `cancellation` で絞ると通常の取消・兄弟分離と7つの競合/再試行ケースの計9件を実行する。
 
 PlaywrightのJSON結果は `test-results/regression-results.json`。画面幅ごとのスクリーンショット、失敗時のtrace・画面・エラー文脈も `test-results/` に出力される。再実行で置き換わるため保存する証跡は実行前に別の場所へコピーする。生成物はGit管理対象外。
 

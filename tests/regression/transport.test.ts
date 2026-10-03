@@ -395,3 +395,46 @@ test("self receipt recovery requires the receipt; anonymous, other parents and c
     headers: { "Content-Type": "application/json", Origin: "https://unrelated.invalid" }, body: JSON.stringify(saved.input) });
   assert.equal(cross.status, 403);
 });
+
+
+test("transport lesson choices group matching grades, retain distinct courses, and disclose only lesson metadata", async () => {
+  await school.pool.query("INSERT INTO class_slots(id,date,start_time,course_label,class_band,lesson_start_date_time,capacity_limit,capacity_current) SELECT 'same-course-middle',date,start_time,course_label,'中級',lesson_start_date_time,capacity_limit,capacity_current FROM class_slots WHERE id=$1", [school.ids.original]);
+  await school.pool.query("INSERT INTO class_slots(id,date,start_time,course_label,class_band,lesson_start_date_time,capacity_limit,capacity_current) SELECT 'other-course-upper',date,start_time,'別コース','上級',lesson_start_date_time,capacity_limit,capacity_current FROM class_slots WHERE id=$1", [school.ids.original]);
+  const list = await school.api("/api/transport/lessons?date=" + school.dates.original);
+  assert.equal(list.status, 200); assert.equal(list.body.slots.length, 3);
+  assert.equal(list.body.slots.filter((slot: any) => slot.startTime === "10:00").length, 2);
+  assert.deepEqual(Object.keys(list.body.slots[0]).sort(), ["id", "date", "startTime", "courseLabel", "lessonStartDateTime", "isPastLesson"].sort());
+  assert.equal((await school.api("/api/transport/lessons?date=2026-02-30")).status, 400);
+  const later = await school.api("/api/transport/lessons?date=" + school.dates.makeup);
+  assert.equal(later.body.slots.length, 2); // Closed lesson excluded, full lesson still valid for attendance.
+  assert.equal((await school.api("/api/class-slots?date=" + school.dates.original)).status, 400); // Absence API unchanged.
+  await school.setClock(parseJstDateTime(school.dates.original, "10:00").toISOString());
+  const started = await school.api("/api/transport/lessons?date=" + school.dates.original);
+  assert.ok(started.body.slots.filter((slot: any) => slot.startTime === "10:00").every((slot: any) => slot.isPastLesson));
+});
+
+test("transport derives all grouped lesson grades server-side and retains old single-grade receipts", async () => {
+  const { selfSubmission } = await import("./transport-helpers");
+  await school.pool.query("INSERT INTO class_slots(id,date,start_time,course_label,class_band,lesson_start_date_time,capacity_limit,capacity_current) SELECT 'same-course-middle',date,start_time,course_label,'中級',lesson_start_date_time,capacity_limit,capacity_current FROM class_slots WHERE id=$1", [school.ids.original]);
+  await school.absence(CHILD_A, { classBand: "中級", originalSlotId: "same-course-middle" });
+  const before = await attendanceSnapshot(school);
+  const modern = await selfSubmission(school);
+  assert.equal(modern.status, 200, JSON.stringify(modern.body));
+  assert.deepEqual(modern.body.profile.classBand.split("/").sort(), ["中級", "初級"].sort());
+  assert.match(modern.body.profile.courseId, /^self-service:v2:/);
+  assert.ok(modern.body.profile.courseId.includes("same-course-middle"));
+  const day = await school.api(dayUrl(modern.body.profile.id), undefined, modern.cookie!);
+  assert.equal(day.body.eligible, true); assert.equal(day.body.reason, null);
+  assert.equal(day.body.lessonLabel, "合成回帰テスト");
+  const admin = await school.api("/api/admin/login", { loginId: "admin", password: PASSWORD });
+  const staff = await school.api("/api/admin/transport/notices?date=" + school.dates.original, undefined, admin.cookie!);
+  assert.match(staff.body[0].attendanceWarning, /欠席連絡/); // The middle-grade absence remains visible to staff.
+  const legacy = await selfSubmission(school, { childName: CHILD_B, classBand: "初級" });
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.body.profile.classBand, "初級");
+  assert.match(legacy.body.profile.courseId, /^self-service:v1:/);
+  const recovered = await school.api("/api/transport/access", { code: legacy.body.receiptCode });
+  assert.equal((await school.api(dayUrl(legacy.body.profile.id), undefined, recovered.cookie!)).body.notice.id, legacy.body.notice.id);
+  assert.equal((await school.api(noticesUrl, noticeInput(legacy.body.profile.id, school.dates.original, { status: "CANCELLED", expectedVersion: 1 }), recovered.cookie!)).status, 200);
+  assert.deepEqual(await attendanceSnapshot(school), before);
+});

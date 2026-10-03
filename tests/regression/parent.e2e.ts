@@ -124,6 +124,8 @@ test("期限切れ管理者セッションは再読み込み後にログイン�
 async function fillTransport(page: Page, school: SchoolFixture, name = CHILD_A) {
   await page.getByLabel("お子様の名前（ひらがなで入力）", { exact: true }).fill(name);
   await page.getByLabel("送迎を利用しない日（日本時間）").fill(school.dates.original);
+  await expect(page.getByLabel("クラス帯", { exact: true })).toHaveCount(0);
+  await page.getByRole("radio", { name: /10:00 - 合成回帰テスト/ }).click();
   await expect(page.getByRole("radio", { name: /10:00 - 合成回帰テスト/ })).toHaveAttribute("aria-checked", "true");
 }
 async function recoverReceipt(page: Page, receipt: string) {
@@ -153,7 +155,23 @@ test("送迎不要：保護者入力→自動受付控え→スタッフ確認�
   const parent = await context.newPage();
   try {
     await parent.goto(school.baseURL);
-    await parent.getByTestId("transport-entry").click();
+    const initialViewport = parent.viewportSize()!;
+    if (info.project.name === "mobile-chromium") await parent.setViewportSize({ width: 320, height: 844 });
+    const entry = parent.getByTestId("transport-entry");
+    const help = parent.getByRole("heading", { name: "はじめての方へ - システムの使い方", exact: true });
+    await expect(entry).toContainText("送迎不要の連絡");
+    await expect(entry).toContainText("出席する日の送迎を使わないとき");
+    const helpBox = await help.boundingBox(), entryBox = await entry.boundingBox();
+    expect(entryBox!.y).toBeGreaterThan(helpBox!.y + helpBox!.height);
+    expect(helpBox!.x + helpBox!.width).toBeLessThanOrEqual(parent.viewportSize()!.width);
+    expect(await parent.getByTestId("transport-entry-description").evaluate(element => {
+      const range = document.createRange(); range.selectNodeContents(element);
+      return range.getClientRects().length;
+    })).toBe(1);
+    await noHorizontalOverflow(parent);
+    await parent.screenshot({ path: info.outputPath("transport-entry.png"), fullPage: true, animations: "disabled" });
+    await parent.setViewportSize(initialViewport);
+    await entry.click();
     await expect(parent.getByLabel("スクールから案内された送迎連絡コード")).toHaveCount(0);
     await fillTransport(parent, school);
     await parent.getByRole("radio", { name: "帰り不要（スクールから帰る便）", exact: true }).check();
@@ -174,6 +192,8 @@ test("送迎不要：保護者入力→自動受付控え→スタッフ確認�
     const card = page.getByTestId("staff-transport-" + profileId);
     await expect(card).toContainText("帰り不要");
     await expect(card).toContainText("保護者入力");
+    await expect(card).not.toContainText(/クラス帯|初級|中級|上級/);
+    await expect(parent.locator("main")).not.toContainText(/クラス帯|初級|中級|上級/);
     await card.getByRole("button", { name: "この内容を確認済みにする" }).click();
     await expect(card).toContainText("スタッフ確認済み");
     await noHorizontalOverflow(page);
@@ -208,8 +228,7 @@ test("送迎不要：兄弟も個別に入力し、本人用控えで再表示�
   const a = await page.getByTestId("transport-receipt-code").innerText();
   await page.getByRole("button", { name: "別のお子様・別の日の連絡を入力" }).click();
   await fillTransport(page, school, CHILD_B);
-  await page.getByLabel("クラス帯", { exact: true }).click();
-  await page.getByRole("option", { name: "中級", exact: true }).click();
+  await page.getByRole("radio", { name: /11:00 - 合成回帰テスト/ }).click();
   await expect(page.getByRole("radio", { name: /11:00 - 合成回帰テスト/ })).toHaveAttribute("aria-checked", "true");
   await page.getByRole("button", { name: "送信内容を確認", exact: true }).click();
   await page.getByRole("button", { name: "この内容で送信", exact: true }).click();
@@ -234,6 +253,7 @@ test("送迎不要：スタッフは閲覧のみ、既存の送迎記録も保�
   await staffLogin(page, school, true);
   await expect(page.getByTestId("staff-transport-" + modern.body.profile.id)).toContainText(CHILD_A);
   await expect(page.getByTestId("staff-transport-" + old.profile.id)).toContainText(CHILD_B);
+  await expect(page.getByTestId("staff-transport-" + old.profile.id)).not.toContainText(/クラス帯|初級|中級|上級/);
   await expect(page.getByRole("button", { name: "この内容を確認済みにする" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /コード.*発行/ })).toHaveCount(0);
   await noHorizontalOverflow(page);
@@ -259,4 +279,33 @@ test("送迎不要：開始前の確認画面から開始時刻に新規送信�
   expect((await school.pool.query("SELECT count(*) FROM transport_notices")).rows[0].count).toBe("0");
   await noHorizontalOverflow(page);
   await page.screenshot({ path: info.outputPath("transport-deadline-closed.png"), fullPage: true, animations: "disabled" });
+});
+
+
+test("送迎不要：級を選ばず同時刻のコースを区別し、候補1件なら自動選択する", async ({ page, school }, info) => {
+  await school.pool.query("INSERT INTO class_slots(id,date,start_time,course_label,class_band,lesson_start_date_time,capacity_limit,capacity_current) SELECT 'same-course-middle',date,start_time,course_label,'中級',lesson_start_date_time,capacity_limit,capacity_current FROM class_slots WHERE id=$1", [school.ids.original]);
+  await school.pool.query("INSERT INTO class_slots(id,date,start_time,course_label,class_band,lesson_start_date_time,capacity_limit,capacity_current) SELECT 'other-course-upper',date,start_time,'別コース','上級',lesson_start_date_time,capacity_limit,capacity_current FROM class_slots WHERE id=$1", [school.ids.original]);
+  await page.goto(school.baseURL + "/transport");
+  await page.getByLabel("お子様の名前（ひらがなで入力）", { exact: true }).fill(CHILD_A);
+  const date = page.getByLabel("送迎を利用しない日（日本時間）");
+  await date.fill(school.dates.original);
+  const choices = page.getByRole("radiogroup", { name: "出席するレッスン枠" });
+  await expect(choices.getByRole("radio")).toHaveCount(3); // Two grades of the same course share one choice.
+  await expect(choices).not.toContainText(/クラス帯|初級|中級|上級/);
+  await expect(page.getByRole("button", { name: "送信内容を確認", exact: true })).toBeDisabled();
+  await date.fill(school.dates.later);
+  await expect(choices.getByRole("radio")).toHaveCount(1);
+  await expect(choices.getByRole("radio")).toHaveAttribute("aria-checked", "true");
+  await date.fill(school.dates.original);
+  const other = page.getByRole("radio", { name: "10:00 - 別コース", exact: true });
+  await other.click();
+  await expect(other).toHaveAttribute("aria-checked", "true");
+  await noHorizontalOverflow(page);
+  await page.screenshot({ path: info.outputPath("transport-lesson-choices.png"), fullPage: true, animations: "disabled" });
+  await page.getByRole("button", { name: "送信内容を確認", exact: true }).click();
+  await expect(page.getByTestId("transport-review")).toContainText("別コース");
+  await expect(page.getByTestId("transport-review")).not.toContainText(/初級|中級|上級/);
+  await page.getByRole("button", { name: "この内容で送信", exact: true }).click();
+  await expect(page.getByTestId("transport-saved")).toBeVisible();
+  expect((await school.pool.query("SELECT class_band FROM transport_profiles")).rows).toEqual([{ class_band: "上級" }]);
 });

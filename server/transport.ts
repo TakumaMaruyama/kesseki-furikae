@@ -1,7 +1,7 @@
 import type { Express, Request, RequestHandler } from "express";
 import { createHash, randomBytes } from "node:crypto";
 import rateLimit from "express-rate-limit";
-import { and, asc, eq, gte, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt } from "drizzle-orm";
 import { z, ZodError } from "zod";
 import { db } from "./db";
 import { absences, classSlots, courses, requests, transportNotices, transportProfiles } from "@shared/schema";
@@ -18,22 +18,40 @@ class TransportError extends Error {
 const fail = (status: number, message: string): never => { throw new TransportError(status, message); };
 const normalizeName = (value: string) => value.normalize("NFKC").replace(/[\s\u3000]+/g, "");
 const hashCode = (value: string) => createHash("sha256").update(value).digest("hex");
-// course_id has no FK. Keep existing UUID course references intact and use an
-// explicit versioned lesson reference for a one-off receipt-owned submission.
+// Keep legacy single-lesson receipts. New receipts retain all grade-specific
+// slots for the chosen time/course; a transport form never guesses a child's grade.
 const SELF_SERVICE = "self-service:v1:";
+const GROUP_SERVICE = "self-service:v2:";
+type Lesson = typeof classSlots.$inferSelect;
 function submittedLesson(profile: Pick<Profile, "courseId">) {
-  if (!profile.courseId.startsWith(SELF_SERVICE)) return null;
-  const ref = profile.courseId.slice(SELF_SERVICE.length);
-  return { serviceDate: ref.slice(0, 10), slotId: ref.slice(11) };
+  const grouped = profile.courseId.startsWith(GROUP_SERVICE);
+  if (!grouped && !profile.courseId.startsWith(SELF_SERVICE)) return null;
+  const ref = profile.courseId.slice((grouped ? GROUP_SERVICE : SELF_SERVICE).length);
+  return { serviceDate: ref.slice(0, 10), slotIds: grouped ? JSON.parse(ref.slice(11)) as string[] : [ref.slice(11)] };
 }
+const profileBands = (profile: Profile) => profile.courseId.startsWith(GROUP_SERVICE) ? profile.classBand.split("/") : [profile.classBand];
 const publicProfile = ({ codeHash: _secret, createdAt: _created, ...profile }: Profile) => ({
   ...profile, selfSubmitted: !!submittedLesson(profile), serviceDate: submittedLesson(profile)?.serviceDate,
 });
-async function submittedSlot(profile: Profile, day: string, store: Store = db) {
+async function submittedSlots(profile: Profile, day: string, store: Store = db) {
   const lesson = submittedLesson(profile);
-  if (!lesson || lesson.serviceDate !== day) return null;
-  const [slot] = await store.select().from(classSlots).where(eq(classSlots.id, lesson.slotId));
-  return slot && formatJstDate(slot.date) === day && slot.classBand === profile.classBand ? slot : null;
+  if (!lesson || lesson.serviceDate !== day) return [];
+  const slots = await store.select().from(classSlots).where(inArray(classSlots.id, lesson.slotIds));
+  return slots.length === lesson.slotIds.length && slots.every(slot => formatJstDate(slot.date) === day && profileBands(profile).includes(slot.classBand)) ? slots : [];
+}
+const lessonKey = (slot: Lesson) => JSON.stringify([slot.startTime, slot.courseLabel, getCanonicalSlotStartDateTime(slot).toISOString()]);
+async function lessonsOnDate(day: string, store: Store = db) {
+  const start = parseJstDate(day);
+  return store.select().from(classSlots).where(and(gte(classSlots.date, start), lt(classSlots.date, addJstDays(start, 1)), eq(classSlots.isClosed, false)))
+    .orderBy(asc(classSlots.startTime), asc(classSlots.courseLabel), asc(classSlots.id));
+}
+function groupLessons(slots: Lesson[]) {
+  const groups = new Map<string, Lesson[]>();
+  for (const slot of slots) {
+    const key = lessonKey(slot);
+    groups.set(key, [...(groups.get(key) || []), slot]);
+  }
+  return Array.from(groups.values());
 }
 function grants(req: Request): Grants {
   const session = req.session as any;
@@ -57,9 +75,9 @@ async function sessionProfiles(req: Request) {
 async function editingWindow(profile: Profile, day: string, store: Store = db) {
   const unavailable = { editable: false, deadlineAt: null, editingReason: "レッスン開始時刻を確認できません。スクールへお問い合わせください。" };
   if (submittedLesson(profile)) {
-    const slot = await submittedSlot(profile, day, store);
-    if (!slot) return unavailable;
-    const deadline = getCanonicalSlotStartDateTime(slot);
+    const slots = await submittedSlots(profile, day, store);
+    if (!slots.length) return unavailable;
+    const deadline = new Date(Math.min(...slots.map(slot => getCanonicalSlotStartDateTime(slot).getTime())));
     return { editable: Date.now() < deadline.getTime(), deadlineAt: deadline.toISOString(),
       editingReason: Date.now() < deadline.getTime() ? null : "レッスン開始時刻を過ぎたため、入力・訂正・取消はできません。スクールへご連絡ください。" };
   }
@@ -77,14 +95,15 @@ async function editingWindow(profile: Profile, day: string, store: Store = db) {
 // Attendance is read-only. The live app has no authoritative member ID in its public absence flow.
 // Match conservatively by normalized name + grade + the exact lesson, and fail closed on ambiguity.
 async function eligibility(profile: Profile, day: string, store: Store = db) {
-  const denied = (reason: string) => ({ eligible: false, reason, lessonTime: null });
+  const denied = (reason: string) => ({ eligible: false, reason, lessonTime: null, lessonLabel: null });
   if (!profile.active) return denied("送迎対象の登録が無効です。スクールへ確認してください。");
   if (submittedLesson(profile)) {
     // Names supplied on a public form are not proof of household identity.
     // Never reveal absence, booking, roster or other notice data through this path.
-    const slot = await submittedSlot(profile, day, store);
-    return slot && !slot.isClosed
-      ? { eligible: true, reason: null, lessonTime: slot.startTime }
+    const slots = await submittedSlots(profile, day, store);
+    const slot = slots.find(item => !item.isClosed);
+    return slot
+      ? { eligible: true, reason: null, lessonTime: slot.startTime, lessonLabel: slot.courseLabel }
       : denied("選択したレッスンは休講、または予定が変更されています。スクールへ確認してください。");
   }
   const [course] = await store.select().from(courses).where(eq(courses.id, profile.courseId));
@@ -121,7 +140,7 @@ async function eligibility(profile: Profile, day: string, store: Store = db) {
     && !["CANCELLED", "EXPIRED"].includes(item.makeupStatus))) {
     return denied("この日は欠席連絡があります。出席予定を先に確認してください。");
   }
-  return { eligible: true, reason: null, lessonTime: course.startTime };
+  return { eligible: true, reason: null, lessonTime: course.startTime, lessonLabel: slots[0].courseLabel };
 }
 const wrap = (handler: (req: Request, res: any) => Promise<unknown>): RequestHandler => async (req, res) => {
   try { await handler(req, res); }
@@ -148,14 +167,14 @@ async function rememberReceipt(req: Request, profile: Profile) {
 // an oracle for another household's attendance or bookings.
 async function staffAttendanceWarning(profile: Profile, day: string) {
   const start = parseJstDate(day), end = addJstDays(start, 1);
-  const reports = await db.select().from(absences).where(and(eq(absences.declaredClassBand, profile.classBand),
+  const reports = await db.select().from(absences).where(and(inArray(absences.declaredClassBand, profileBands(profile)),
     gte(absences.absentDate, start), lt(absences.absentDate, end)));
-  const bookings = await db.select().from(requests).where(and(eq(requests.declaredClassBand, profile.classBand),
+  const bookings = await db.select().from(requests).where(and(inArray(requests.declaredClassBand, profileBands(profile)),
     eq(requests.status, "確定"), gte(requests.toSlotStartDateTime, start), lt(requests.toSlotStartDateTime, end)));
   return [
     reports.some(item => normalizeName(item.childName) === normalizeName(profile.childName) && item.reportType === "ABSENCE"
-      && !["CANCELLED", "EXPIRED"].includes(item.makeupStatus)) ? "同名・同じクラスの欠席連絡があります。" : null,
-    bookings.some(item => normalizeName(item.childName) === normalizeName(profile.childName)) ? "同名・同じクラスの振替予約があります。配車予定を確認してください。" : null,
+      && !["CANCELLED", "EXPIRED"].includes(item.makeupStatus)) ? "同名の欠席連絡があります。" : null,
+    bookings.some(item => normalizeName(item.childName) === normalizeName(profile.childName)) ? "同名の振替予約があります。配車予定を確認してください。" : null,
   ].filter(Boolean).join(" ");
 }
 
@@ -176,30 +195,57 @@ export function registerTransportRoutes(app: Express, requireAdmin: RequestHandl
     standardHeaders: true, legacyHeaders: false, message: { error: "しばらく待ってからコードを確認してください。" } });
   const submissionLimiter = rateLimit({ windowMs: 15 * 60_000, max: 30,
     standardHeaders: true, legacyHeaders: false, message: { error: "送信回数が多いため、少し待ってからお試しください。" } });
+  app.get("/api/transport/lessons", wrap(async (req, res) => {
+    const day = transportDateSchema.parse(req.query.date);
+    const groups = groupLessons(await lessonsOnDate(day));
+    res.json({ slots: groups.map(([slot]) => ({
+      id: slot.id, date: day, startTime: slot.startTime, courseLabel: slot.courseLabel,
+      lessonStartDateTime: getCanonicalSlotStartDateTime(slot).toISOString(),
+      isPastLesson: Date.now() >= getCanonicalSlotStartDateTime(slot).getTime(),
+    })) });
+  }));
   app.post("/api/transport/submissions", submissionLimiter, wrap(async (req, res) => {
     const data = transportSubmissionSchema.parse(req.body);
     const codeHash = hashCode(data.receiptCode);
-    const courseId = `${SELF_SERVICE}${data.serviceDate}:${data.slotId}`;
     const result = await db.transaction(async tx => {
-      // Unique receipt hash serializes concurrent retries, without matching names
-      // against anyone else's profile and without touching attendance tables.
-      const [created] = await tx.insert(transportProfiles).values({ childName: data.childName,
-        classBand: data.classBand, courseId, outbound: true, inbound: true, codeHash,
-      }).onConflictDoNothing({ target: transportProfiles.codeHash }).returning();
-      const profile = created || (await tx.select().from(transportProfiles).where(eq(transportProfiles.codeHash, codeHash)).for("update"))[0];
-      if (!profile?.active || profile.courseId !== courseId || profile.childName !== data.childName || profile.classBand !== data.classBand) {
-        fail(409, "この受付控えは別の連絡に使われています。控えから連絡を確認してください。");
+      const reuse = async (profile: Profile) => {
+        const lesson = submittedLesson(profile);
+        if (!profile.active || !lesson || lesson.serviceDate !== data.serviceDate || !lesson.slotIds.includes(data.slotId)
+          || profile.childName !== data.childName || (data.classBand && !profileBands(profile).includes(data.classBand))) {
+          fail(409, "この受付控えは別の連絡に使われています。控えから連絡を確認してください。");
+        }
+        const [notice] = await tx.select().from(transportNotices).where(eq(transportNotices.profileId, profile.id));
+        if (!notice) fail(409, "この受付控えは別の連絡に使われています。控えから連絡を確認してください。");
+        return { profile, notice };
+      };
+      const [previous] = await tx.select().from(transportProfiles).where(eq(transportProfiles.codeHash, codeHash)).for("update");
+      if (previous) return reuse(previous);
+      const [slot] = await tx.select().from(classSlots).where(eq(classSlots.id, data.slotId));
+      if (!slot || formatJstDate(slot.date) !== data.serviceDate || slot.isClosed) {
+        fail(400, "選択したレッスンは休講、または予定が変更されています。スクールへ確認してください。");
       }
-      const [existing] = await tx.select().from(transportNotices).where(eq(transportNotices.profileId, profile.id));
-      if (existing) return { profile, notice: existing }; // Retry never edits or reactivates a notice.
-      const window = await editingWindow(profile, data.serviceDate, tx);
-      const day = await eligibility(profile, data.serviceDate, tx);
+      if (data.classBand && data.classBand !== slot.classBand) fail(400, "選択したレッスンを確認してください。");
+      // Same time/course across grades is one transport choice. Keep its exact
+      // slots and grades internally, without attributing one grade to the child.
+      const group = data.classBand ? [slot] : (await lessonsOnDate(data.serviceDate, tx)).filter(item => lessonKey(item) === lessonKey(slot));
+      const classBand = Array.from(new Set(group.map(item => item.classBand))).sort().join("/");
+      const courseId = data.classBand ? SELF_SERVICE + data.serviceDate + ":" + slot.id
+        : GROUP_SERVICE + data.serviceDate + ":" + JSON.stringify(group.map(item => item.id).sort());
+      const [created] = await tx.insert(transportProfiles).values({ childName: data.childName,
+        classBand, courseId, outbound: true, inbound: true, codeHash,
+      }).onConflictDoNothing({ target: transportProfiles.codeHash }).returning();
+      if (!created) {
+        const [concurrent] = await tx.select().from(transportProfiles).where(eq(transportProfiles.codeHash, codeHash)).for("update");
+        return reuse(concurrent);
+      }
+      const window = await editingWindow(created, data.serviceDate, tx);
+      const day = await eligibility(created, data.serviceDate, tx);
       if (!day.eligible) fail(400, day.reason!);
       if (!window.editable) fail(400, window.editingReason!);
-      const [notice] = await tx.insert(transportNotices).values({ profileId: profile.id,
+      const [notice] = await tx.insert(transportNotices).values({ profileId: created.id,
         serviceDate: data.serviceDate, direction: data.direction, note: data.note,
       }).returning();
-      return { profile, notice };
+      return { profile: created, notice };
     });
     await rememberReceipt(req, result.profile);
     res.json({ profile: publicProfile(result.profile), notice: result.notice, receiptCode: data.receiptCode });
@@ -299,9 +345,9 @@ export function registerTransportRoutes(app: Express, requireAdmin: RequestHandl
       const privateWarning = selfSubmitted && notice.status === "ACTIVE" ? await staffAttendanceWarning(profile, day) : null;
       const duplicate = selfSubmitted && rows.some(row => row.transport_notices.id !== notice.id
         && row.transport_notices.status === "ACTIVE" && notice.status === "ACTIVE"
-        && row.transport_profiles.classBand === profile.classBand
+        && profileBands(row.transport_profiles).some(band => profileBands(profile).includes(band))
         && normalizeName(row.transport_profiles.childName) === normalizeName(profile.childName));
-      return { ...notice, childName: profile.childName, classBand: profile.classBand, lessonTime: attendance.lessonTime,
+      return { ...notice, childName: profile.childName, classBand: profile.classBand, lessonTime: attendance.lessonTime, lessonLabel: attendance.lessonLabel,
         selfSubmitted, attendanceWarning: notice.status === "ACTIVE" ? [attendance.reason,
           privateWarning,
           selfSubmitted ? "保護者入力の連絡です。送迎名簿・出席予定を確認してください。" : null,

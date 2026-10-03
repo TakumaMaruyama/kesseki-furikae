@@ -6,13 +6,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { filterSelectableAbsenceSlots, getAutoSelectedAbsenceSlotId } from "@/lib/absence-slot-selection";
 import { formatJstDate } from "@shared/jst";
 import { directionLabels, type TransportDay, type TransportDirection, type TransportProfileView } from "@shared/transport";
 
-type Slot = { id: string; date: string; classBand: string; startTime: string; courseLabel: string; isPastLesson?: boolean; lessonStartDateTime?: string };
+type Slot = { id: string; date: string; startTime: string; courseLabel: string; isPastLesson?: boolean; lessonStartDateTime?: string };
 const makeReceipt = () => "R-" + btoa(String.fromCharCode(...Array.from(crypto.getRandomValues(new Uint8Array(18))))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const jstTime = (value: string) => new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 
@@ -34,7 +33,7 @@ function NoticeFields({ direction, setDirection, note, setNote, disabled, profil
 }
 
 export default function TransportPage() {
-  const [isNew, setIsNew] = useState(true), [childName, setChildName] = useState(""), [classBand, setClassBand] = useState("初級");
+  const [isNew, setIsNew] = useState(true), [childName, setChildName] = useState("");
   const [slotId, setSlotId] = useState(""), [selectedId, setSelectedId] = useState("");
   const [date, setDate] = useState(() => formatJstDate(new Date()));
   const [direction, setDirection] = useState<TransportDirection>("BOTH"), [note, setNote] = useState("");
@@ -44,8 +43,8 @@ export default function TransportPage() {
   const profiles = session.data?.profiles || [];
   const profile = profiles.find(item => item.id === selectedId) || profiles[0];
   const today = session.data?.today || formatJstDate(new Date());
-  const slots = useQuery<{ slots: Slot[] }>({ queryKey: ["/api/class-slots", date, classBand], enabled: isNew && /^\d{4}-\d{2}-\d{2}$/.test(date),
-    queryFn: () => apiRequest("GET", "/api/class-slots?date=" + date + "&classBand=" + encodeURIComponent(classBand)), refetchInterval: 15_000, retry: false });
+  const slots = useQuery<{ slots: Slot[] }>({ queryKey: ["/api/transport/lessons", date], enabled: isNew && /^\d{4}-\d{2}-\d{2}$/.test(date),
+    queryFn: () => apiRequest("GET", "/api/transport/lessons?date=" + date), refetchInterval: 15_000, retry: false });
   const options = filterSelectableAbsenceSlots(slots.data?.slots || [], false);
   const selectedSlot = options.find(slot => slot.id === slotId);
   const dayKey = ["/api/transport/day", profile?.id, date];
@@ -54,9 +53,8 @@ export default function TransportPage() {
   const saved = day.data?.notice;
   useEffect(() => {
     try {
-      const name = localStorage.getItem("hamasui_childName"), band = localStorage.getItem("hamasui_classBand");
+      const name = localStorage.getItem("hamasui_childName");
       if (name) setChildName(name);
-      if (band && ["初級", "中級", "上級"].includes(band)) setClassBand(band);
     } catch { /* The form works when storage is unavailable. */ }
   }, []);
   useEffect(() => {
@@ -75,7 +73,7 @@ export default function TransportPage() {
   const access = useMutation({ mutationFn: (value: string) => apiRequest("POST", "/api/transport/access", { code: value }),
     onSuccess: async (data, value) => { setReceipt(value); setCode(""); openProfile(data.selectedId, data.profiles); await session.refetch(); } });
   const submit = useMutation({ mutationFn: (receiptCode: string) => apiRequest("POST", "/api/transport/submissions",
-    { childName, classBand, serviceDate: date, slotId, direction, note, receiptCode }),
+    { childName, serviceDate: date, slotId, direction, note, receiptCode }),
     onSuccess: async data => {
       setReceipt(data.receiptCode); setDraftReceipt(""); setSelectedId(data.profile.id); setIsNew(false); setReview(false);
       await session.refetch(); await queryClient.invalidateQueries({ queryKey: ["/api/transport/day"] });
@@ -97,7 +95,7 @@ export default function TransportPage() {
   const reviewCard = <div className="rounded-lg border-2 border-primary p-4 space-y-3" data-testid="transport-review">
     <h2 className="font-bold">送信前の確認</h2>
     <p>{isNew ? childName : profile?.childName}さん · <strong>{date} のみ</strong></p>
-    <p>{isNew ? classBand : profile?.classBand} · {isNew ? selectedSlot?.startTime : day.data?.lessonTime}</p>
+    <p>{isNew ? selectedSlot?.startTime : day.data?.lessonTime} · {isNew ? selectedSlot?.courseLabel : day.data?.lessonLabel}</p>
     <p className="text-lg font-bold">{directionLabels[direction]}</p>
     <p>レッスンには出席します。他の日の送迎は変更しません。</p>
     {note && <p className="whitespace-pre-wrap break-words">補足：{note}</p>}
@@ -122,20 +120,15 @@ export default function TransportPage() {
           <fieldset disabled={busy || review} className="space-y-4">
             <div className="space-y-2"><Label htmlFor="transport-name">お子様の名前（ひらがなで入力）</Label>
               <Input id="transport-name" className="h-12" placeholder="例：やまだ たろう" pattern="[ぁ-ゖー 　]+" value={childName} onChange={event => setChildName(event.target.value)} maxLength={80} required /></div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2"><Label htmlFor="transport-band">クラス帯</Label>
-                <Select value={classBand} onValueChange={value => { setClassBand(value); setSlotId(""); }}><SelectTrigger id="transport-band" className="h-12"><SelectValue /></SelectTrigger><SelectContent>{["初級", "中級", "上級"].map(band => <SelectItem key={band} value={band}>{band}</SelectItem>)}</SelectContent></Select>
-              </div>
-              <div className="space-y-2 min-w-0"><Label htmlFor="transport-date">送迎を利用しない日（日本時間）</Label>
-                <Input id="transport-date" className="h-12 w-full min-w-0" type="date" value={date} required min={today} onChange={event => { setDate(event.target.value); setSlotId(""); }} /></div>
-            </div>
+            <div className="space-y-2 min-w-0"><Label htmlFor="transport-date">送迎を利用しない日（日本時間）</Label>
+              <Input id="transport-date" className="h-12 w-full min-w-0" type="date" value={date} required min={today} onChange={event => { setDate(event.target.value); setSlotId(""); }} /></div>
             <fieldset className="space-y-2"><legend className="font-medium mb-2">出席するレッスン枠</legend>
               {slots.isFetching && <p role="status">レッスン枠を読み込み中です…</p>}
               <div role="radiogroup" aria-label="出席するレッスン枠" className="grid gap-2">{options.map(slot => <button type="button" role="radio" key={slot.id}
-                aria-checked={slot.id === slotId} aria-label={slot.startTime + " - " + slot.courseLabel + "（" + slot.classBand + "）"}
+                aria-checked={slot.id === slotId} aria-label={slot.startTime + " - " + slot.courseLabel}
                 className={"rounded-md border p-3 text-left " + (slot.id === slotId ? "border-primary bg-primary/10 ring-1 ring-primary" : "border-input")}
-                onClick={() => setSlotId(slot.id)}><span className="block font-semibold">{slot.startTime}</span><span className="text-sm">{slot.courseLabel}（{slot.classBand}）</span></button>)}</div>
-              {!slots.isFetching && options.length === 0 && <p className="text-sm text-destructive">この日のクラスには、開始前のレッスンがありません。</p>}
+                onClick={() => setSlotId(slot.id)}><span className="block font-semibold">{slot.startTime}</span><span className="text-sm">{slot.courseLabel}</span></button>)}</div>
+              {!slots.isFetching && options.length === 0 && <p className="text-sm text-destructive">この日には、開始前のレッスンがありません。</p>}
               {selectedSlot?.lessonStartDateTime && <p className="text-sm">入力・訂正・取消の締切：{jstTime(selectedSlot.lessonStartDateTime)}（レッスン開始）</p>}
             </fieldset>
           </fieldset>
@@ -154,9 +147,9 @@ export default function TransportPage() {
         {submit.isError && draftReceipt && <Button variant="outline" disabled={busy} onClick={() => { submit.reset(); access.mutate(draftReceipt); }}>この控えで送信結果を確認</Button>}
       </div>}
       {!isNew && profile && <Card><CardHeader><CardTitle className="text-lg"><h2>{profile.childName}さんの連絡</h2></CardTitle></CardHeader><CardContent className="space-y-4">
-        {profile.selfSubmitted ? <p className="font-medium">{date} のみ · {profile.classBand}</p> : <div><Label htmlFor="transport-old-date">対象日（日本時間）</Label><Input id="transport-old-date" type="date" value={date} onChange={event => setDate(event.target.value)} /></div>}
+        {profile.selfSubmitted ? <p className="font-medium">{date} のみ</p> : <div><Label htmlFor="transport-old-date">対象日（日本時間）</Label><Input id="transport-old-date" type="date" value={date} onChange={event => setDate(event.target.value)} /></div>}
         {day.isFetching && <p role="status">連絡を確認中です…</p>}
-        {day.data && <p className="text-sm" data-testid="transport-eligibility">{day.data.eligible ? "レッスン " + day.data.lessonTime + "・出席予定" : day.data.reason}</p>}
+        {day.data && <p className="text-sm" data-testid="transport-eligibility">{day.data.eligible ? "レッスン " + day.data.lessonTime + " " + (day.data.lessonLabel || "") + "・出席予定" : day.data.reason}</p>}
         {day.data?.deadlineAt && <p className="text-sm">入力・訂正・取消の締切：{jstTime(day.data.deadlineAt)}（レッスン開始）</p>}
         {day.data?.editingReason && <p role="status" className="text-destructive">{day.data.editingReason}</p>}
         {saved && <div className="rounded-lg border p-4 space-y-2" data-testid="transport-saved">
@@ -172,7 +165,7 @@ export default function TransportPage() {
           <NoticeFields direction={direction} setDirection={setDirection} note={note} setNote={setNote} disabled={busy || review} profile={profile} />
           {!review ? <Button type="submit" className="w-full" disabled={busy}>{saved?.status === "ACTIVE" ? "訂正内容を確認" : "送信内容を確認"}</Button> : reviewCard}
         </form>}
-        <p className="text-sm text-muted-foreground">名前・クラス・日付・レッスンを訂正する場合は、この連絡を取り消してから新しく入力してください。</p>
+        <p className="text-sm text-muted-foreground">名前・日付・レッスンを訂正する場合は、この連絡を取り消してから新しく入力してください。</p>
         <Button variant="outline" disabled={busy} onClick={startNew}>別のお子様・別の日の連絡を入力</Button>
       </CardContent></Card>}
       <details className="rounded-lg border p-4 space-y-4">
@@ -186,7 +179,7 @@ export default function TransportPage() {
         {profiles.length > 0 && <div className="space-y-3">
           <Label htmlFor="transport-child">この端末で確認した連絡（最近5件）</Label>
           <select id="transport-child" className="w-full rounded-md border bg-background p-3" value={selectedId} disabled={busy} onChange={event => { setReceipt(""); openProfile(event.target.value); }}>
-            <option value="">連絡を選択</option>{profiles.map(item => <option key={item.id} value={item.id}>{item.childName}（{item.classBand}）{item.serviceDate ? " · " + item.serviceDate : ""}</option>)}
+            <option value="">連絡を選択</option>{profiles.map(item => <option key={item.id} value={item.id}>{item.childName}{item.serviceDate ? " · " + item.serviceDate : ""}</option>)}
           </select>
           <Button variant="ghost" disabled={busy} onClick={async () => {
             await apiRequest("POST", "/api/transport/logout", {}); queryClient.removeQueries({ queryKey: ["/api/transport/day"] }); await session.refetch(); startNew();
