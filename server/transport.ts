@@ -6,7 +6,7 @@ import { z, ZodError } from "zod";
 import { db } from "./db";
 import { absences, classSlots, courses, requests, transportNotices, transportProfiles } from "@shared/schema";
 import { addJstDays, formatJstDate, getJstDayOfWeek, parseJstDate } from "@shared/jst";
-import { transportDateSchema, transportNoticeSchema, transportProfileSchema } from "@shared/transport";
+import { transportDateSchema, transportNoticeSchema, transportProfileSchema, transportSubmissionSchema } from "@shared/transport";
 import { getCanonicalSlotStartDateTime } from "@shared/slotDateTime";
 
 type Store = Pick<typeof db, "select" | "insert" | "update">;
@@ -18,7 +18,23 @@ class TransportError extends Error {
 const fail = (status: number, message: string): never => { throw new TransportError(status, message); };
 const normalizeName = (value: string) => value.normalize("NFKC").replace(/[\s\u3000]+/g, "");
 const hashCode = (value: string) => createHash("sha256").update(value).digest("hex");
-const publicProfile = ({ codeHash: _secret, createdAt: _created, ...profile }: Profile) => profile;
+// course_id has no FK. Keep existing UUID course references intact and use an
+// explicit versioned lesson reference for a one-off receipt-owned submission.
+const SELF_SERVICE = "self-service:v1:";
+function submittedLesson(profile: Pick<Profile, "courseId">) {
+  if (!profile.courseId.startsWith(SELF_SERVICE)) return null;
+  const ref = profile.courseId.slice(SELF_SERVICE.length);
+  return { serviceDate: ref.slice(0, 10), slotId: ref.slice(11) };
+}
+const publicProfile = ({ codeHash: _secret, createdAt: _created, ...profile }: Profile) => ({
+  ...profile, selfSubmitted: !!submittedLesson(profile), serviceDate: submittedLesson(profile)?.serviceDate,
+});
+async function submittedSlot(profile: Profile, day: string, store: Store = db) {
+  const lesson = submittedLesson(profile);
+  if (!lesson || lesson.serviceDate !== day) return null;
+  const [slot] = await store.select().from(classSlots).where(eq(classSlots.id, lesson.slotId));
+  return slot && formatJstDate(slot.date) === day && slot.classBand === profile.classBand ? slot : null;
+}
 function grants(req: Request): Grants {
   const session = req.session as any;
   return session.transportUntil > Date.now() ? session.transportGrants || {} : {};
@@ -40,6 +56,13 @@ async function sessionProfiles(req: Request) {
 }
 async function editingWindow(profile: Profile, day: string, store: Store = db) {
   const unavailable = { editable: false, deadlineAt: null, editingReason: "レッスン開始時刻を確認できません。スクールへお問い合わせください。" };
+  if (submittedLesson(profile)) {
+    const slot = await submittedSlot(profile, day, store);
+    if (!slot) return unavailable;
+    const deadline = getCanonicalSlotStartDateTime(slot);
+    return { editable: Date.now() < deadline.getTime(), deadlineAt: deadline.toISOString(),
+      editingReason: Date.now() < deadline.getTime() ? null : "レッスン開始時刻を過ぎたため、入力・訂正・取消はできません。スクールへご連絡ください。" };
+  }
   const [course] = await store.select().from(courses).where(eq(courses.id, profile.courseId));
   if (!course || course.dayOfWeek.slice(0, 1) !== "日月火水木金土"[getJstDayOfWeek(parseJstDate(day))]) return unavailable;
   const slots = await store.select().from(classSlots).where(and(
@@ -56,6 +79,14 @@ async function editingWindow(profile: Profile, day: string, store: Store = db) {
 async function eligibility(profile: Profile, day: string, store: Store = db) {
   const denied = (reason: string) => ({ eligible: false, reason, lessonTime: null });
   if (!profile.active) return denied("送迎対象の登録が無効です。スクールへ確認してください。");
+  if (submittedLesson(profile)) {
+    // Names supplied on a public form are not proof of household identity.
+    // Never reveal absence, booking, roster or other notice data through this path.
+    const slot = await submittedSlot(profile, day, store);
+    return slot && !slot.isClosed
+      ? { eligible: true, reason: null, lessonTime: slot.startTime }
+      : denied("選択したレッスンは休講、または予定が変更されています。スクールへ確認してください。");
+  }
   const [course] = await store.select().from(courses).where(eq(courses.id, profile.courseId));
   if (!course?.isActive) return denied("通常コースが確認できません。スクールへ確認してください。");
   const start = parseJstDate(day), end = addJstDays(start, 1);
@@ -101,6 +132,33 @@ const wrap = (handler: (req: Request, res: any) => Promise<unknown>): RequestHan
   }
 };
 
+async function rememberReceipt(req: Request, profile: Profile) {
+  const current = { ...grants(req), [profile.id]: profile.codeHash };
+  // Keep only the five most recently opened receipts in this browser session.
+  const entries = Object.entries(current).filter(([id]) => id !== profile.id);
+  const limited = Object.fromEntries([...entries.slice(-4), [profile.id, profile.codeHash]]);
+  const previous = req.session as any;
+  const { staffRole, isAdmin } = previous;
+  await new Promise<void>((resolve, reject) => req.session.regenerate(error => error ? reject(error) : resolve()));
+  Object.assign(req.session, { staffRole, isAdmin, transportGrants: limited, transportUntil: Date.now() + 12 * 60 * 60_000 });
+  await new Promise<void>((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));
+}
+
+// Only called after the staff/admin guard. Public name entry must never become
+// an oracle for another household's attendance or bookings.
+async function staffAttendanceWarning(profile: Profile, day: string) {
+  const start = parseJstDate(day), end = addJstDays(start, 1);
+  const reports = await db.select().from(absences).where(and(eq(absences.declaredClassBand, profile.classBand),
+    gte(absences.absentDate, start), lt(absences.absentDate, end)));
+  const bookings = await db.select().from(requests).where(and(eq(requests.declaredClassBand, profile.classBand),
+    eq(requests.status, "確定"), gte(requests.toSlotStartDateTime, start), lt(requests.toSlotStartDateTime, end)));
+  return [
+    reports.some(item => normalizeName(item.childName) === normalizeName(profile.childName) && item.reportType === "ABSENCE"
+      && !["CANCELLED", "EXPIRED"].includes(item.makeupStatus)) ? "同名・同じクラスの欠席連絡があります。" : null,
+    bookings.some(item => normalizeName(item.childName) === normalizeName(profile.childName)) ? "同名・同じクラスの振替予約があります。配車予定を確認してください。" : null,
+  ].filter(Boolean).join(" ");
+}
+
 export function registerTransportRoutes(app: Express, requireAdmin: RequestHandler, requireStaff: RequestHandler) {
   app.use(["/api/transport", "/api/admin/transport", "/api/staff/transport"], (req, res, next) => {
     res.set("Cache-Control", "no-store");
@@ -116,6 +174,36 @@ export function registerTransportRoutes(app: Express, requireAdmin: RequestHandl
   });
   const accessLimiter = rateLimit({ windowMs: 15 * 60_000, max: 15, skipSuccessfulRequests: true,
     standardHeaders: true, legacyHeaders: false, message: { error: "しばらく待ってからコードを確認してください。" } });
+  const submissionLimiter = rateLimit({ windowMs: 15 * 60_000, max: 30,
+    standardHeaders: true, legacyHeaders: false, message: { error: "送信回数が多いため、少し待ってからお試しください。" } });
+  app.post("/api/transport/submissions", submissionLimiter, wrap(async (req, res) => {
+    const data = transportSubmissionSchema.parse(req.body);
+    const codeHash = hashCode(data.receiptCode);
+    const courseId = `${SELF_SERVICE}${data.serviceDate}:${data.slotId}`;
+    const result = await db.transaction(async tx => {
+      // Unique receipt hash serializes concurrent retries, without matching names
+      // against anyone else's profile and without touching attendance tables.
+      const [created] = await tx.insert(transportProfiles).values({ childName: data.childName,
+        classBand: data.classBand, courseId, outbound: true, inbound: true, codeHash,
+      }).onConflictDoNothing({ target: transportProfiles.codeHash }).returning();
+      const profile = created || (await tx.select().from(transportProfiles).where(eq(transportProfiles.codeHash, codeHash)).for("update"))[0];
+      if (!profile?.active || profile.courseId !== courseId || profile.childName !== data.childName || profile.classBand !== data.classBand) {
+        fail(409, "この受付控えは別の連絡に使われています。控えから連絡を確認してください。");
+      }
+      const [existing] = await tx.select().from(transportNotices).where(eq(transportNotices.profileId, profile.id));
+      if (existing) return { profile, notice: existing }; // Retry never edits or reactivates a notice.
+      const window = await editingWindow(profile, data.serviceDate, tx);
+      const day = await eligibility(profile, data.serviceDate, tx);
+      if (!day.eligible) fail(400, day.reason!);
+      if (!window.editable) fail(400, window.editingReason!);
+      const [notice] = await tx.insert(transportNotices).values({ profileId: profile.id,
+        serviceDate: data.serviceDate, direction: data.direction, note: data.note,
+      }).returning();
+      return { profile, notice };
+    });
+    await rememberReceipt(req, result.profile);
+    res.json({ profile: publicProfile(result.profile), notice: result.notice, receiptCode: data.receiptCode });
+  }));
   app.post("/api/transport/access", accessLimiter, wrap(async (req, res) => {
     const { code } = z.object({ code: z.string().trim().min(1).max(100) }).strict().parse(req.body);
     const [profile] = await db.select().from(transportProfiles).where(eq(transportProfiles.codeHash, hashCode(code)));
@@ -207,8 +295,18 @@ export function registerTransportRoutes(app: Express, requireAdmin: RequestHandl
       .where(eq(transportNotices.serviceDate, day)).orderBy(asc(transportProfiles.childName));
     res.json(await Promise.all(rows.map(async ({ transport_notices: notice, transport_profiles: profile }) => {
       const attendance = await eligibility(profile, day);
+      const selfSubmitted = !!submittedLesson(profile);
+      const privateWarning = selfSubmitted && notice.status === "ACTIVE" ? await staffAttendanceWarning(profile, day) : null;
+      const duplicate = selfSubmitted && rows.some(row => row.transport_notices.id !== notice.id
+        && row.transport_notices.status === "ACTIVE" && notice.status === "ACTIVE"
+        && row.transport_profiles.classBand === profile.classBand
+        && normalizeName(row.transport_profiles.childName) === normalizeName(profile.childName));
       return { ...notice, childName: profile.childName, classBand: profile.classBand, lessonTime: attendance.lessonTime,
-        attendanceWarning: notice.status === "ACTIVE" ? attendance.reason : null };
+        selfSubmitted, attendanceWarning: notice.status === "ACTIVE" ? [attendance.reason,
+          privateWarning,
+          selfSubmitted ? "保護者入力の連絡です。送迎名簿・出席予定を確認してください。" : null,
+          duplicate ? "同名の連絡が複数あります。内容を確認してください。" : null,
+        ].filter(Boolean).join(" ") || null : null };
     })));
   });
   app.get("/api/admin/transport/notices", requireAdmin, listNotices);

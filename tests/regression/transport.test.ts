@@ -258,3 +258,140 @@ test("transport additive migration and destructive local rollback preserve all e
   assert.equal((await school.pool.query("SELECT count(*) FROM transport_notices")).rows[0].count, "0");
   assert.deepEqual(await attendanceSnapshot(school), before);
 });
+
+test("self entry needs no staff registration, owns one receipt, and preserves attendance", async () => {
+  const { selfSubmission } = await import("./transport-helpers");
+  const before = await attendanceSnapshot(school);
+  const saved = await selfSubmission(school);
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body.receiptCode, saved.input.receiptCode);
+  assert.equal(saved.body.profile.selfSubmitted, true);
+  assert.equal(saved.body.profile.serviceDate, school.dates.original);
+  assert.equal(saved.body.profile.codeHash, undefined);
+  const profileId = saved.body.profile.id;
+  const session = await school.api("/api/transport/session", undefined, saved.cookie!);
+  assert.deepEqual(session.body.profiles.map((x: any) => x.id), [profileId]);
+  let version = 1;
+  for (const direction of ["INBOUND", "BOTH", "OUTBOUND"]) {
+    const result = await school.api(noticesUrl, noticeInput(profileId, school.dates.original, { direction, expectedVersion: version }), saved.cookie!);
+    assert.equal(result.status, 200, JSON.stringify(result.body)); version++;
+  }
+  const login = await school.api("/api/admin/login", { loginId: "admin", password: PASSWORD });
+  assert.equal((await school.api("/api/admin/transport/notices/" + saved.body.notice.id + "/acknowledge", { version }, login.cookie!)).status, 200);
+  const cancelled = await school.api(noticesUrl, noticeInput(profileId, school.dates.original, { status: "CANCELLED", expectedVersion: version }), saved.cookie!);
+  assert.equal(cancelled.status, 200); assert.equal(cancelled.body.acknowledgedVersion, null);
+  assert.deepEqual(await attendanceSnapshot(school), before);
+  assert.equal((await school.pool.query("SELECT count(*) FROM courses")).rows[0].count, "0");
+  assert.notEqual((await school.pool.query("SELECT code_hash FROM transport_profiles")).rows[0].code_hash, saved.input.receiptCode);
+  assert.deepEqual(await school.deliveries(), []);
+});
+
+test("self entry does not grant access to same-name households or reveal their attendance", async () => {
+  const { selfSubmission } = await import("./transport-helpers");
+  await school.absence();
+  const { admin, create, enter } = await transportSetup(school);
+  const old = await create(CHILD_B), oldCookie = await enter(old.code);
+  await school.api(noticesUrl, noticeInput(old.profile.id, school.dates.original, { note: "別家庭の非公開メモ" }), oldCookie);
+  const a = await selfSubmission(school), b = await selfSubmission(school, { childName: CHILD_B, note: "自分の連絡" });
+  assert.equal(a.status, 200); assert.equal(b.status, 200);
+  assert.notEqual(b.body.profile.id, old.profile.id);
+  const ownDay = await school.api(dayUrl(a.body.profile.id), undefined, a.cookie!);
+  assert.equal(ownDay.body.eligible, true);
+  assert.equal(ownDay.body.reason, null); // No public attendance oracle based on an entered name.
+  for (const id of [old.profile.id, b.body.profile.id]) {
+    assert.equal((await school.api(dayUrl(id), undefined, a.cookie!)).status, 403);
+    for (const status of ["ACTIVE", "CANCELLED"]) assert.equal((await school.api(noticesUrl,
+      noticeInput(id, school.dates.original, { status, expectedVersion: 1 }), a.cookie!)).status, 403);
+  }
+  assert.equal((await school.api(dayUrl(a.body.profile.id))).status, 401);
+  assert.deepEqual((await school.api("/api/transport/session")).body.profiles, []);
+  assert.ok(!JSON.stringify(b.body).includes("別家庭の非公開メモ"));
+  assert.ok(!JSON.stringify(ownDay.body).includes("欠席連絡"));
+  const staff = await school.api("/api/admin/transport/notices?date=" + school.dates.original, undefined, admin);
+  assert.match(staff.body.find((x: any) => x.profileId === a.body.profile.id).attendanceWarning, /欠席連絡/);
+  assert.match(staff.body.find((x: any) => x.profileId === b.body.profile.id).attendanceWarning, /同名の連絡が複数/);
+});
+
+test("self entry retries are atomic and never overwrite an existing receipt's edits", async () => {
+  const { selfSubmission } = await import("./transport-helpers");
+  const { randomBytes } = await import("node:crypto");
+  const receiptCode = "R-" + randomBytes(18).toString("base64url");
+  // The first requests race while neither the profile nor the notice exists.
+  const results = await Promise.all([selfSubmission(school, { receiptCode }), selfSubmission(school, { receiptCode })]);
+  const first = results[0];
+  assert.deepEqual(results.map(r => r.status), [200, 200]);
+  assert.ok(results.every(r => r.body.notice.id === first.body.notice.id));
+  const edit = await school.api(noticesUrl, noticeInput(first.body.profile.id, school.dates.original,
+    { direction: "BOTH", expectedVersion: 1 }), first.cookie!);
+  assert.equal(edit.status, 200);
+  const repeat = await school.api("/api/transport/submissions", first.input);
+  assert.equal(repeat.body.notice.version, 2); assert.equal(repeat.body.notice.direction, "BOTH");
+  assert.equal((await school.api("/api/transport/submissions", { ...first.input, childName: CHILD_B })).status, 409);
+  const counts = await school.pool.query("SELECT (SELECT count(*) FROM transport_profiles)::int AS profiles, (SELECT count(*) FROM transport_notices)::int AS notices");
+  assert.deepEqual(counts.rows[0], { profiles: 1, notices: 1 });
+});
+
+test("self entry validates lesson/date/class and cannot reuse a receipt on another day", async () => {
+  const { selfSubmission } = await import("./transport-helpers");
+  for (const fields of [{ serviceDate: "2026-02-30" }, { slotId: "unknown" }, { classBand: "中級" },
+    { serviceDate: school.dates.makeup }, { note: "あ".repeat(301) }, { profileId: "cannot-claim-a-profile" }]) {
+    const result = await selfSubmission(school, fields);
+    assert.equal(result.status, 400, JSON.stringify(result.body));
+  }
+  assert.equal((await school.pool.query("SELECT count(*) FROM transport_profiles")).rows[0].count, "0");
+  const saved = await selfSubmission(school);
+  assert.equal(saved.status, 200);
+  assert.equal((await school.api(noticesUrl, noticeInput(saved.body.profile.id, school.dates.later), saved.cookie!)).status, 400);
+  const anotherDay = await school.api(dayUrl(saved.body.profile.id, school.dates.later), undefined, saved.cookie!);
+  assert.equal(anotherDay.body.notice, null); assert.equal(anotherDay.body.editable, false);
+});
+
+test("self entry closes creation, correction and cancellation exactly at lesson start", async () => {
+  const { selfSubmission } = await import("./transport-helpers");
+  const start = parseJstDateTime(school.dates.original, "10:00").getTime();
+  await school.setClock(new Date(start - 1).toISOString());
+  const saved = await selfSubmission(school); assert.equal(saved.status, 200);
+  await school.setClock(new Date(start).toISOString());
+  assert.equal((await selfSubmission(school, { childName: CHILD_B })).status, 400);
+  for (const status of ["ACTIVE", "CANCELLED"]) assert.equal((await school.api(noticesUrl,
+    noticeInput(saved.body.profile.id, school.dates.original, { status, direction: "BOTH", expectedVersion: 1 }), saved.cookie!)).status, 400);
+  assert.equal((await school.api(dayUrl(saved.body.profile.id), undefined, saved.cookie!)).body.editable, false);
+  assert.equal((await school.api("/api/transport/submissions", saved.input)).body.notice.version, 1); // read-only retry
+});
+
+test("self entry rechecks the deadline after a real database lock wait", async () => {
+  const { selfSubmission } = await import("./transport-helpers");
+  const start = parseJstDateTime(school.dates.original, "10:00").getTime();
+  await school.setClock(new Date(start - 100).toISOString());
+  const lock = await school.pool.connect();
+  try {
+    await lock.query("BEGIN"); await lock.query("LOCK TABLE transport_profiles IN SHARE MODE");
+    const pending = selfSubmission(school);
+    for (let i = 0; i < 100; i++) {
+      const waiting = await school.pool.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND cardinality(pg_blocking_pids(pid))>0");
+      if (waiting.rows[0].n) break;
+      if (i === 99) throw new Error("Submission did not reach the lock");
+      await new Promise(resolve => setTimeout(resolve,10));
+    }
+    await school.setClock(new Date(start).toISOString()); await lock.query("COMMIT");
+    assert.equal((await pending).status, 400);
+    assert.equal((await school.pool.query("SELECT count(*) FROM transport_notices")).rows[0].count, "0");
+  } finally { await lock.query("ROLLBACK"); lock.release(); }
+});
+
+test("self receipt recovery requires the receipt; anonymous, other parents and coaches cannot acknowledge", async () => {
+  const { selfSubmission } = await import("./transport-helpers");
+  const saved = await selfSubmission(school);
+  await school.pool.query("UPDATE admin_sessions SET sess=jsonb_set(sess::jsonb,'{transportUntil}','0')::json WHERE sess::jsonb ? 'transportUntil'");
+  assert.equal((await school.api(dayUrl(saved.body.profile.id), undefined, saved.cookie!)).status, 401);
+  const recovered = await school.api("/api/transport/access", { code: saved.body.receiptCode });
+  assert.equal(recovered.status, 200);
+  assert.equal((await school.api(dayUrl(saved.body.profile.id), undefined, recovered.cookie!)).body.notice.id, saved.body.notice.id);
+  const coach = await school.api("/api/admin/login", { loginId: "synthetic-coach", password: PASSWORD });
+  for (const cookie of [undefined, recovered.cookie!, coach.cookie!]) {
+    assert.equal((await school.api("/api/admin/transport/notices/" + saved.body.notice.id + "/acknowledge", { version: 1 }, cookie)).status, 401);
+  }
+  const cross = await fetch(school.baseURL + "/api/transport/submissions", { method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "https://unrelated.invalid" }, body: JSON.stringify(saved.input) });
+  assert.equal(cross.status, 403);
+});

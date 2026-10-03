@@ -17,9 +17,21 @@ export const transportNoticeSchema = z.object({
   note: z.string().trim().max(300, "補足は300文字以内で入力してください").default(""),
   status: z.enum(["ACTIVE", "CANCELLED"]), expectedVersion: z.number().int().min(0),
 }).strict();
+// A receipt is generated automatically by the browser, before sending, so a lost
+// response can be retried without creating a second notice. It is a bearer secret.
+export const transportSubmissionSchema = z.object({
+  childName: z.string().trim().min(1).max(80).regex(/^[ぁ-ゖー 　]+$/, "名前はひらがなで入力してください"),
+  classBand: z.enum(["初級", "中級", "上級"]),
+  serviceDate: transportDateSchema,
+  slotId: z.string().min(1).max(200),
+  direction: z.enum(["OUTBOUND", "INBOUND", "BOTH"]),
+  note: z.string().trim().max(300, "補足は300文字以内で入力してください").default(""),
+  receiptCode: z.string().regex(/^R-[A-Za-z0-9_-]{24}$/, "受付控えを作り直して送信してください"),
+}).strict();
 export type TransportProfileView = {
   id: string; childName: string; classBand: string; courseId: string;
   outbound: boolean; inbound: boolean; active: boolean;
+  selfSubmitted?: boolean; serviceDate?: string;
 };
 export type TransportNoticeView = {
   id: string; profileId: string; serviceDate: string; direction: TransportDirection;
@@ -33,4 +45,5 @@ export type TransportDay = {
 };
 export type StaffTransportNotice = TransportNoticeView & {
   childName: string; classBand: string; lessonTime: string | null; attendanceWarning: string | null;
+  selfSubmitted?: boolean;
 };

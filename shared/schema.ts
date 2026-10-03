@@ -107,7 +107,9 @@ export const insertCourseSchema = createInsertSchema(courses).omit({
 export type InsertCourse = z.infer<typeof insertCourseSchema>;
 export type Course = typeof courses.$inferSelect;
 
-// Staff-verified transport roster. The active app uses child-specific codes, not parent accounts.
+// Legacy staff roster and private, receipt-owned parent submissions. For a parent
+// submission, courseId holds a versioned, tagged reference to ONE lesson/date;
+// codeHash holds the receipt hash. This never joins a household by name.
 export const transportProfiles = pgTable("transport_profiles", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   childName: varchar("child_name").notNull(),
