@@ -123,7 +123,7 @@ test("期限切れ管理者セッションは再読み込み後にログイン�
 
 async function fillTransport(page: Page, school: SchoolFixture, name = CHILD_A) {
   await page.getByLabel("お子様の名前（ひらがなで入力）", { exact: true }).fill(name);
-  await page.getByLabel("送迎を利用しない日（日本時間）").fill(school.dates.original);
+  await page.getByLabel("送迎を利用しない日", { exact: true }).fill(school.dates.original);
   await expect(page.getByLabel("クラス帯", { exact: true })).toHaveCount(0);
   await page.getByRole("radio", { name: /10:00 - 合成回帰テスト/ }).click();
   await expect(page.getByRole("radio", { name: /10:00 - 合成回帰テスト/ })).toHaveAttribute("aria-checked", "true");
@@ -287,7 +287,7 @@ test("送迎不要：級を選ばず同時刻のコースを区別し、候補1�
   await school.pool.query("INSERT INTO class_slots(id,date,start_time,course_label,class_band,lesson_start_date_time,capacity_limit,capacity_current) SELECT 'other-course-upper',date,start_time,'別コース','上級',lesson_start_date_time,capacity_limit,capacity_current FROM class_slots WHERE id=$1", [school.ids.original]);
   await page.goto(school.baseURL + "/transport");
   await page.getByLabel("お子様の名前（ひらがなで入力）", { exact: true }).fill(CHILD_A);
-  const date = page.getByLabel("送迎を利用しない日（日本時間）");
+  const date = page.getByLabel("送迎を利用しない日", { exact: true });
   await date.fill(school.dates.original);
   const choices = page.getByRole("radiogroup", { name: "出席するレッスン枠" });
   await expect(choices.getByRole("radio")).toHaveCount(3); // Two grades of the same course share one choice.

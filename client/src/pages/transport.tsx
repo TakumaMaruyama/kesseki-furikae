@@ -120,7 +120,7 @@ export default function TransportPage() {
           <fieldset disabled={busy || review} className="space-y-4">
             <div className="space-y-2"><Label htmlFor="transport-name">お子様の名前（ひらがなで入力）</Label>
               <Input id="transport-name" className="h-12" placeholder="例：やまだ たろう" pattern="[ぁ-ゖー 　]+" value={childName} onChange={event => setChildName(event.target.value)} maxLength={80} required /></div>
-            <div className="space-y-2 min-w-0"><Label htmlFor="transport-date">送迎を利用しない日（日本時間）</Label>
+            <div className="space-y-2 min-w-0"><Label htmlFor="transport-date">送迎を利用しない日</Label>
               <Input id="transport-date" className="h-12 w-full min-w-0" type="date" value={date} required min={today} onChange={event => { setDate(event.target.value); setSlotId(""); }} /></div>
             <fieldset className="space-y-2"><legend className="font-medium mb-2">出席するレッスン枠</legend>
               {slots.isFetching && <p role="status">レッスン枠を読み込み中です…</p>}
