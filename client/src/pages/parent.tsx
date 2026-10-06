@@ -101,7 +101,6 @@ type ClosureValidationResult = {
 };
 
 type DuplicateAbsenceInfo = {
-  confirmCode: string;
   childName: string;
   declaredClassBand: "初級" | "中級" | "上級";
   absentDateISO: string;
@@ -706,12 +705,11 @@ export default function ParentPage() {
         description: "確認コード一覧を表示しています。",
       });
     } catch (error: any) {
-      if (error?.code === "DUPLICATE_ABSENCE" && error.confirmCode) {
+      if (error?.code === "DUPLICATE_ABSENCE") {
         const rowIndex = typeof error.rowIndex === "number" ? error.rowIndex : 0;
         const duplicateRow = data.items[rowIndex] || data.items[0];
         if (duplicateRow) {
           setDuplicateAbsenceInfo({
-            confirmCode: error.confirmCode,
             childName: duplicateRow.childName,
             declaredClassBand: duplicateRow.declaredClassBand,
             absentDateISO: duplicateRow.absentDateISO,
@@ -792,6 +790,7 @@ export default function ParentPage() {
     try {
       const result = await apiRequest("POST", "/api/book", {
         absenceId: absenceData?.id,
+        resumeToken: absenceData?.resumeToken || token,
         childName: searchParams2.childName,
         declaredClassBand: searchParams2.declaredClassBand,
         absentDateISO: searchParams2.absentDateISO,
@@ -1638,21 +1637,11 @@ export default function ParentPage() {
                   {format(parseLocalDate(duplicateAbsenceInfo.absentDateISO), "yyyy年M月d日(E)", { locale: ja })}
                   ／{duplicateAbsenceInfo.declaredClassBand}／{getReportTypeLabel(duplicateAbsenceInfo.reportType)}
                 </p>
-                <p className="text-sm text-muted-foreground">登録済みの確認コード</p>
-                <p className="text-center text-3xl font-bold tracking-[0.2em] font-mono text-primary">
-                  {duplicateAbsenceInfo.confirmCode}
+                <p className="text-sm text-muted-foreground">
+                  保存した確認コードまたは連絡詳細リンクから確認してください。控えがない場合はスクールへお問い合わせください。
                 </p>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => copyText(duplicateAbsenceInfo.confirmCode, "確認コードをコピーしました。")}
-                  data-testid="button-copy-duplicate-confirm-code"
-                >
-                  <CopyIcon className="w-4 h-4 mr-2" />
-                  コードをコピー
-                </Button>
+              <div className="grid grid-cols-1 gap-2">
                 <Button
                   type="button"
                   onClick={() => setDuplicateAbsenceInfo(null)}

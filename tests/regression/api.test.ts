@@ -34,8 +34,9 @@ async function assertOccupiedSeats(id: string, expected: number) {
     "The occupancy counter must match the confirmed reservations that remain");
 }
 
-async function runBlockedCancellations(
+async function runBlockedActions(
   lockSql: string, parameters: string[], actions: Array<() => ReturnType<SchoolFixture["api"]>>,
+  expectedStatuses = actions.map(() => 200),
 ) {
   const blocker = await school.pool.connect();
   const pending: Array<ReturnType<SchoolFixture["api"]>> = [];
@@ -59,9 +60,9 @@ async function runBlockedCancellations(
     blocker.release();
   }
   const results = await Promise.all(pending);
-  assert.equal(pending.length, actions.length, "Every cancellation must enter the intended overlap");
+  assert.equal(pending.length, actions.length, "Every operation must enter the intended overlap");
   assert.ok(blocked >= actions.length, "Real PostgreSQL lock waits are required to prove the overlap");
-  assert.deepEqual(results.map((r) => r.status), actions.map(() => 200), JSON.stringify(results));
+  assert.deepEqual(results.map((r) => r.status).sort(), expectedStatuses.slice().sort(), JSON.stringify(results));
   return results;
 }
 
@@ -132,13 +133,48 @@ test("invalid second sibling rolls back the entire batch without sending email",
   assert.deepEqual(await school.deliveries(), []);
 });
 
-test("duplicate absence with whitespace variation returns the existing code without decrementing twice", async () => {
+test("duplicate absence with whitespace variation never reveals another household's confirmation code", async () => {
   const a = await school.absence();
   const again = await school.api("/api/absences", school.input("ごうせいてすと　あおい"));
   assert.equal(again.status, 409);
   assert.equal(again.body.code, "DUPLICATE_ABSENCE");
-  assert.equal(again.body.confirmCode, a.confirmCode);
+  assert.equal(again.body.confirmCode, undefined);
+  assert.ok(!JSON.stringify(again.body).includes(a.resumeToken));
+  assert.ok(!JSON.stringify(again.body).includes(a.confirmCode));
   assert.equal((await slot(school.ids.original)).capacity_current, 4);
+});
+
+test("duplicate batch registration never returns another household's lookup capability", async () => {
+  const a = await school.absence(CHILD_A, { contactEmail: "synthetic-private@example.invalid", reason: "合成の非公開理由" });
+  const result = await school.api("/api/absences/batch", { reportType: "ABSENCE", items: [school.input()] });
+  assert.equal(result.status, 409);
+  for (const value of [a.confirmCode, a.resumeToken, "synthetic-private@example.invalid", "合成の非公開理由"]) {
+    assert.ok(!JSON.stringify(result.body).includes(value), "Public duplicate errors must not expose private credentials or details");
+  }
+  assert.equal((await slot(school.ids.original)).capacity_current, 4);
+});
+
+test("booking requires the matching household token even when the absence ID and child details are known", async () => {
+  const a = await school.absence();
+  const b = await school.absence(CHILD_B);
+  for (const resumeToken of [undefined, "wrong-synthetic-token", b.resumeToken]) {
+    const result = await school.api("/api/book", school.booking(a.absenceId, CHILD_A, school.ids.available, { resumeToken }));
+    assert.equal(result.status, 403, JSON.stringify(result.body));
+    assert.equal(await absenceState(a.absenceId), "PENDING");
+    assert.equal((await slot(school.ids.available)).capacity_makeup_used, 0);
+  }
+  assert.equal((await school.api("/api/book", school.booking(a.absenceId))).status, 200);
+});
+
+for (const secondName of [CHILD_A, "ごうせいてすと　あおい"]) test(`concurrent bookings for two absences of one child create only one seat (${secondName})`, async () => {
+  const a = await school.absence();
+  const b = await school.absence(secondName, { absentDateISO: school.dates.makeup, originalSlotId: school.ids.available });
+  await runBlockedActions("SELECT id FROM class_slots WHERE id=$1 FOR UPDATE", [school.ids.later], [
+    () => school.api("/api/book", school.booking(a.absenceId, CHILD_A, school.ids.later)),
+    () => school.api("/api/book", school.booking(b.absenceId, secondName, school.ids.later, { absentDateISO: school.dates.makeup })),
+  ], [200, 400]);
+  await assertOccupiedSeats(school.ids.later, 1);
+  assert.deepEqual([await absenceState(a.absenceId), await absenceState(b.absenceId)].sort(), ["MAKEUP_CONFIRMED", "PENDING"]);
 });
 
 test("late notification does not free a seat and cannot be used for makeup", async () => {
@@ -244,7 +280,7 @@ test("simultaneous cancellation of the same booking must retain another child's 
   const { a, b, requestA } = await seedTwoBookings(true);
   const payload = { requestId: requestA.id, cancelToken: requestA.cancel_token };
   const cancel = () => school.api("/api/cancel-request", payload);
-  const results = await runBlockedCancellations("SELECT id FROM requests WHERE id=$1 FOR UPDATE", [requestA.id], [cancel, cancel]);
+  const results = await runBlockedActions("SELECT id FROM requests WHERE id=$1 FOR UPDATE", [requestA.id], [cancel, cancel]);
   assert.equal((await requestFor(b.absenceId)).child_name, CHILD_B);
   await assertOccupiedSeats(school.ids.available, 1);
   assert.deepEqual(results.map((r) => r.body.alreadyCancelled).sort(), [false, true]);
@@ -262,7 +298,7 @@ for (const first of ["booking", "absence"] as const) {
     const cancelBooking = () => school.api("/api/cancel-request", { requestId: requestA.id, cancelToken: requestA.cancel_token });
     const cancelAbsence = () => school.api("/api/cancel-absence", { resumeToken: a.resumeToken });
     const actions = first === "booking" ? [cancelBooking, cancelAbsence] : [cancelAbsence, cancelBooking];
-    await runBlockedCancellations("SELECT id FROM requests WHERE id=$1 FOR UPDATE", [requestA.id], actions);
+    await runBlockedActions("SELECT id FROM requests WHERE id=$1 FOR UPDATE", [requestA.id], actions);
     await assertOccupiedSeats(school.ids.available, 1);
     assert.equal((await requestFor(b.absenceId)).child_name, CHILD_B);
     assert.equal(await absenceState(a.absenceId), "CANCELLED");
@@ -281,7 +317,7 @@ test("cancellation of two different bookings in parallel preserves a third child
   const childC = "ごうせいてすと そら";
   const c = await school.absence(childC);
   assert.equal((await school.api("/api/book", school.booking(c.absenceId, childC))).status, 200);
-  await runBlockedCancellations("SELECT id FROM class_slots WHERE id=$1 FOR UPDATE", [school.ids.available],
+  await runBlockedActions("SELECT id FROM class_slots WHERE id=$1 FOR UPDATE", [school.ids.available],
     [requestA, requestB].map((request) => () => school.api("/api/cancel-request", { requestId: request.id, cancelToken: request.cancel_token })));
   await assertOccupiedSeats(school.ids.available, 1);
   assert.equal((await requestFor(c.absenceId)).child_name, childC);
@@ -299,7 +335,7 @@ test("cancellation of an admin booking without an absence is safe across two ent
   assert.equal((await school.api("/api/book", school.booking(b.absenceId, CHILD_B))).status, 200);
   const request = (await school.pool.query("SELECT * FROM requests WHERE child_name=$1", [CHILD_A])).rows[0];
   assert.equal(request.absence_id, null);
-  const results = await runBlockedCancellations("SELECT id FROM requests WHERE id=$1 FOR UPDATE", [request.id], [
+  const results = await runBlockedActions("SELECT id FROM requests WHERE id=$1 FOR UPDATE", [request.id], [
     () => school.api("/api/cancel-request", { requestId: request.id, cancelToken: request.cancel_token }),
     () => school.api(`/api/cancel/${request.cancel_token}`, {}),
   ]);
@@ -328,7 +364,7 @@ test("cancellation retry after rebooking leaves the replacement and another chil
 test("cancellation of the same absence concurrently restores the original seat only once", async () => {
   const { a, b } = await seedTwoBookings();
   const cancel = () => school.api("/api/cancel-absence", { resumeToken: a.resumeToken });
-  const results = await runBlockedCancellations("SELECT id FROM absences WHERE id=$1 FOR UPDATE", [a.absenceId], [cancel, cancel]);
+  const results = await runBlockedActions("SELECT id FROM absences WHERE id=$1 FOR UPDATE", [a.absenceId], [cancel, cancel]);
   assert.deepEqual(results.map((r) => r.body.alreadyCancelled).sort(), [false, true]);
   assert.equal(await absenceState(a.absenceId), "CANCELLED");
   assert.equal((await slot(school.ids.original)).capacity_current, 4);

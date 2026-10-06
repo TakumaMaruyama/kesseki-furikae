@@ -98,6 +98,7 @@ export async function createSchoolFixture(ui = false) {
       later: formatJstDate(addJstDays(new Date(), 9)),
       past: formatJstDate(addJstDays(new Date(), -1)),
     };
+    const receiptTokens = new Map<string, string>();
     const ids = {
       original: buildCanonicalSlotId(dates.original, "10:00", "初級"),
       sibling: buildCanonicalSlotId(dates.original, "11:00", "中級"),
@@ -108,6 +109,7 @@ export async function createSchoolFixture(ui = false) {
       past: buildCanonicalSlotId(dates.past, "10:00", "初級"),
     };
     const reset = async () => {
+      receiptTokens.clear();
       await setClock(null);
       await pool!.query(`TRUNCATE ${tableNames.join(", ")} RESTART IDENTITY CASCADE`);
       await pool!.query("INSERT INTO global_settings(id, makeup_window_days) VALUES (1, 30)");
@@ -167,10 +169,11 @@ export async function createSchoolFixture(ui = false) {
       async absence(childName = CHILD_A, overrides = {}) {
         const result = await api("/api/absences", { ...input(childName), reportType: "ABSENCE", ...overrides });
         assert.equal(result.status, 200, JSON.stringify(result.body));
+        receiptTokens.set(result.body.absenceId, result.body.resumeToken);
         return result.body;
       },
       booking(absenceId: string, childName = CHILD_A, toSlotId = ids.available, overrides = {}) {
-        return { ...input(childName), absenceId, toSlotId, ...overrides };
+        return { ...input(childName), absenceId, resumeToken: receiptTokens.get(absenceId), toSlotId, ...overrides };
       },
       async expireSessions() { await pool!.query("UPDATE admin_sessions SET expire = now() - interval '1 day'"); },
       async deliveries() {

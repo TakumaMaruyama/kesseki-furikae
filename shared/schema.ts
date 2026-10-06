@@ -545,6 +545,7 @@ export const bookRequestSchema = z.preprocess(
   normalizeDeclaredClassBandAlias,
   z.object({
     absenceId: z.string().optional(),
+    resumeToken: z.string().min(1).max(100).optional(),
     childId: z.string().optional(),
     childName: z.string().min(1),
     declaredClassBand: requiredClassBandEnum,

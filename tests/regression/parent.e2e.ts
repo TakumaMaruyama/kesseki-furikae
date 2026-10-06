@@ -67,6 +67,23 @@ test("兄弟の欠席登録と確認コードによる対象児童の切替", as
   await noHorizontalOverflow(page);
 });
 
+test("重複連絡では他家庭の確認コードを表示せず控えでの確認へ案内する", async ({ page, school }, info) => {
+  const existing = await school.absence();
+  await page.goto(school.baseURL);
+  await fillChild(page, school, 0, CHILD_A, "初級");
+  await page.getByTestId("button-submit-absence-batch").click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("すでに登録されています");
+  await expect(dialog).toContainText("保存した確認コードまたは連絡詳細リンクから確認してください。");
+  await expect(page.locator("body")).not.toContainText(existing.confirmCode);
+  await expect(page.locator("body")).not.toContainText(existing.resumeToken);
+  await expect(page.getByTestId("button-copy-duplicate-confirm-code")).toHaveCount(0);
+  await noHorizontalOverflow(page);
+  await page.screenshot({ path: info.outputPath("duplicate-without-private-code.png"), animations: "disabled" });
+  await page.getByTestId("button-close-duplicate-dialog").click();
+  await expect(dialog).toHaveCount(0);
+});
+
 test("級を切り替えると前の級のレッスン枠が送信されない", async ({ page, school }) => {
   await page.goto(school.baseURL);
   await fillChild(page, school, 0, CHILD_A, "初級");
