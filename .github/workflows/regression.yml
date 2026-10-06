@@ -1,0 +1,48 @@
+name: Regression
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regression-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    name: Synthetic regression
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      # A legacy gitlink has no .gitmodules entry. Plain public Git checkout
+      # does not initialize it or persist credentials for submodule cleanup.
+      - name: Check out and verify the actual PR commit
+        env:
+          AUDIT_EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git init
+          git remote add origin https://github.com/TakumaMaruyama/kesseki-furikae.git
+          git -c submodule.recurse=false fetch --depth=1 origin "$AUDIT_EXPECTED_SHA"
+          git -c submodule.recurse=false checkout --detach "$AUDIT_EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$AUDIT_EXPECTED_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install chromium
+      - run: npm run check
+      - run: npm run test:regression:typecheck
+      - run: npm run test:regression
+      - name: Production build without ambient credentials
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          import { cleanEnvironment } from './tests/regression/environment.mjs';
+          const result = spawnSync('npm', ['run', 'build'], {
+            env: { ...cleanEnvironment(), NODE_ENV: 'production' }, stdio: 'inherit',
+          });
+          process.exit(result.status ?? 1);
+          NODE

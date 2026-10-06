@@ -1,4 +1,4 @@
-import { pgTable, varchar, integer, timestamp, text, index, json, boolean, uniqueIndex, foreignKey } from "drizzle-orm/pg-core";
+import { pgTable, varchar, integer, timestamp, text, index, json, boolean, uniqueIndex, foreignKey, date, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -106,6 +106,44 @@ export const insertCourseSchema = createInsertSchema(courses).omit({
 });
 export type InsertCourse = z.infer<typeof insertCourseSchema>;
 export type Course = typeof courses.$inferSelect;
+
+// Legacy staff roster and private, receipt-owned parent submissions. For a parent
+// submission, courseId holds a versioned, tagged reference to ONE lesson/date;
+// codeHash holds the receipt hash. This never joins a household by name.
+export const transportProfiles = pgTable("transport_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  childName: varchar("child_name").notNull(),
+  classBand: varchar("class_band").notNull(),
+  courseId: varchar("course_id").notNull(),
+  outbound: boolean("outbound").notNull(),
+  inbound: boolean("inbound").notNull(),
+  active: boolean("active").notNull().default(true),
+  codeHash: varchar("code_hash").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("transport_profile_code").on(table.codeHash),
+  check("transport_profile_legs", sql`${table.outbound} OR ${table.inbound}`),
+]);
+
+// A civil date in Japan, never a recurring instruction and never an attendance write.
+export const transportNotices = pgTable("transport_notices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  profileId: varchar("profile_id").notNull().references(() => transportProfiles.id),
+  serviceDate: date("service_date", { mode: "string" }).notNull(),
+  direction: varchar("direction").$type<"OUTBOUND" | "INBOUND" | "BOTH">().notNull(),
+  note: varchar("note", { length: 300 }).notNull().default(""),
+  status: varchar("status").$type<"ACTIVE" | "CANCELLED">().notNull().default("ACTIVE"),
+  version: integer("version").notNull().default(1),
+  acknowledgedVersion: integer("acknowledged_version"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("transport_notice_child_date").on(table.profileId, table.serviceDate),
+  index("transport_notice_date").on(table.serviceDate),
+  check("transport_notice_direction", sql`${table.direction} IN ('OUTBOUND', 'INBOUND', 'BOTH')`),
+  check("transport_notice_status", sql`${table.status} IN ('ACTIVE', 'CANCELLED')`),
+  check("transport_notice_version", sql`${table.version} > 0`),
+]);
 
 // Global settings
 export const globalSettings = pgTable("global_settings", {
@@ -507,6 +545,7 @@ export const bookRequestSchema = z.preprocess(
   normalizeDeclaredClassBandAlias,
   z.object({
     absenceId: z.string().optional(),
+    resumeToken: z.string().min(1).max(100).optional(),
     childId: z.string().optional(),
     childName: z.string().min(1),
     declaredClassBand: requiredClassBandEnum,

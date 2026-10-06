@@ -68,6 +68,7 @@ import {
 } from "./confirmCode";
 import { getAdminAbsenceHistory, getAdminRequestHistory } from "./adminHistory";
 import { toPublicLookupAbsence, toPublicLookupRequest } from "./publicLookup";
+import { registerTransportRoutes } from "./transport";
 
 
 const ADMIN_HISTORY_MONTH_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])$/;
@@ -163,6 +164,11 @@ function requireCoach(req: Request, res: Response, next: NextFunction) {
   } else {
     res.status(401).json({ error: "コーチ認証が必要です" });
   }
+}
+
+function requireStaff(req: Request, res: Response, next: NextFunction) {
+  if (getStaffRole(req)) next();
+  else res.status(401).json({ error: "スタッフ認証が必要です" });
 }
 
 function normalizeOptionalAdminField(value?: string | null): string | null | undefined {
@@ -609,29 +615,25 @@ type CreatedAbsenceInternal = {
 class BatchRowError extends Error {
   rowIndex: number;
   errorCode?: string;
-  confirmCode?: string;
 
   constructor(
     rowIndex: number,
     message: string,
-    details: { errorCode?: string; confirmCode?: string } = {},
+    details: { errorCode?: string } = {},
   ) {
     super(message);
     this.name = "BatchRowError";
     this.rowIndex = rowIndex;
     this.errorCode = details.errorCode;
-    this.confirmCode = details.confirmCode;
   }
 }
 
 class DuplicateAbsenceError extends Error {
   errorCode = "DUPLICATE_ABSENCE";
-  confirmCode: string;
 
-  constructor(confirmCode: string) {
+  constructor() {
     super("同じ時間帯・級・名前の連絡が既に登録されています。");
     this.name = "DuplicateAbsenceError";
-    this.confirmCode = confirmCode;
   }
 }
 
@@ -654,7 +656,6 @@ function toAbsenceBatchRowError(index: number, error: any): BatchRowError {
   if (error instanceof DuplicateAbsenceError) {
     return new BatchRowError(index, error.message, {
       errorCode: error.errorCode,
-      confirmCode: error.confirmCode,
     });
   }
   if (isConfirmCodeGenerationFailure(error)) {
@@ -691,7 +692,6 @@ function sendAbsenceBatchRowError(res: Response, error: BatchRowError) {
     error: error.message,
     rowIndex: error.rowIndex,
     code: error.errorCode,
-    confirmCode: error.confirmCode,
   });
 }
 
@@ -829,7 +829,6 @@ async function createAbsenceRecordInTransaction(
       declaredClassBand: absences.declaredClassBand,
       reportType: absences.reportType,
       makeupStatus: absences.makeupStatus,
-      confirmCode: absences.confirmCode,
     })
     .from(absences)
     .where(and(
@@ -839,11 +838,11 @@ async function createAbsenceRecordInTransaction(
       sql`${absences.makeupStatus} NOT IN ('CANCELLED', 'EXPIRED')`,
     ));
 
-  const duplicateAbsence = existingAbsences.find((existing: { childName: string; confirmCode: string }) => (
+  const duplicateAbsence = existingAbsences.find((existing: { childName: string }) => (
     normalizeAbsenceNameForDuplicate(existing.childName) === normalizedChildName
   ));
   if (duplicateAbsence) {
-    throw new DuplicateAbsenceError(duplicateAbsence.confirmCode);
+    throw new DuplicateAbsenceError();
   }
 
   const settings = await storage.getGlobalSettings();
@@ -1137,6 +1136,7 @@ async function cancelRequestUnified(requestId: string): Promise<CancelRequestRes
 type MakeupBookingOptions = {
   allowOverCapacity: boolean;
   requireAbsence: boolean;
+  requireReceipt?: boolean;
 };
 
 async function createMakeupBooking(data: BookRequest, options: MakeupBookingOptions) {
@@ -1172,12 +1172,15 @@ async function createMakeupBooking(data: BookRequest, options: MakeupBookingOpti
       throw new Error("BOOK_SLOT_FULL");
     }
 
-    const duplicateRequest = await tx.select({ id: requests.id }).from(requests).where(and(
+    // Different absences for one child can race for the same lesson, including
+    // different grade slots at that time. Serialize before checking occupancy.
+    const bookingLockKey = `booking:${normalizeAbsenceNameForDuplicate(data.childName)}:${slotStartDateTime.toISOString()}`;
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${bookingLockKey}))`);
+    const sameTimeRequests = await tx.select({ childName: requests.childName }).from(requests).where(and(
       eq(requests.status, "確定"),
-      eq(requests.childName, data.childName),
       eq(requests.toSlotStartDateTime, slotStartDateTime),
     ));
-    if (duplicateRequest.length > 0) {
+    if (sameTimeRequests.some(request => normalizeAbsenceNameForDuplicate(request.childName) === normalizeAbsenceNameForDuplicate(data.childName))) {
       throw new Error("BOOK_DUPLICATE_CHILD");
     }
 
@@ -1352,6 +1355,15 @@ function respondMakeupBookingError(res: Response, error: any) {
 async function handleMakeupBooking(req: Request, res: Response, options: MakeupBookingOptions) {
   try {
     const data = bookRequestSchema.parse(req.body);
+    // An ID, name, grade and lesson are not proof of ownership. Check the
+    // private receipt before any availability or existing-booking responses.
+    if (options.requireReceipt) {
+      if (!data.absenceId) throw new Error("BOOK_ABSENCE_REQUIRED");
+      const absence = data.resumeToken ? await storage.getAbsenceByResumeToken(data.resumeToken) : null;
+      if (!absence || absence.id !== data.absenceId) {
+        return res.status(403).json({ success: false, message: "保存した連絡詳細リンク、または確認コードから開き直してください。" });
+      }
+    }
     const bookingResult = await createMakeupBooking(data, options);
 
     if (bookingResult.contactEmail) {
@@ -1422,6 +1434,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       },
     })
   );
+
+  registerTransportRoutes(app, requireAdmin, requireStaff);
 
   // Successful logins do not consume this limit; failed attempts do.
   const adminLoginLimiter = rateLimit({
@@ -2836,6 +2850,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return handleMakeupBooking(req, res, {
       allowOverCapacity: false,
       requireAbsence: true,
+      requireReceipt: true,
     });
   });
 

@@ -50,7 +50,8 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (process.env.NODE_ENV !== "production" && capturedJsonResponse) {
+      const isTransport = path.startsWith("/api/transport") || path.startsWith("/api/admin/transport") || path.startsWith("/api/staff/transport");
+      if (process.env.NODE_ENV !== "production" && capturedJsonResponse && !isTransport) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }
 

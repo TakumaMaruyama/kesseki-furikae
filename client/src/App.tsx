@@ -1,11 +1,12 @@
 import { useEffect } from "react";
-import { Switch, Route, useLocation } from "wouter";
+import { Switch, Route, useLocation, useSearch } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import StatusPage from "@/pages/status";
 import ParentPage from "@/pages/parent";
+import TransportPage from "@/pages/transport";
 import AdminPage from "@/pages/admin";
 import CoachPage from "@/pages/coach";
 import CancelAbsencePage from "@/pages/cancel-absence";
@@ -21,6 +22,7 @@ function MainRouter() {
     <Switch>
       <Route path="/" component={ParentPage} />
       <Route path="/absence" component={ParentPage} />
+      <Route path="/transport" component={TransportPage} />
       <Route path="/status" component={StatusPage} />
       <Route path="/cancel-absence" component={CancelAbsencePage} />
       <Route path="/cancel-absence/:token" component={CancelAbsenceTokenPage} />
@@ -44,10 +46,12 @@ function StaffRouter() {
 
 function AppContent() {
   const [location] = useLocation();
+  const search = useSearch();
   const isAdmin = location === "/admin";
   const isCoach = location === "/coach";
   const isStaff = isAdmin || location === "/coach";
   const isStatus = location === "/status";
+  const isTransport = location === "/transport" || (isStaff && new URLSearchParams(search).get("tab") === "transport");
 
   useEffect(() => {
     const hasOpenModal = () => {
@@ -99,12 +103,12 @@ function AppContent() {
   return (
     <>
       {isStaff ? <StaffRouter /> : <MainRouter />}
-      <FloatingActionButtons
+      {!isTransport && <FloatingActionButtons
         isAdmin={isAdmin}
         isCoach={isCoach}
         isStaff={isStaff}
         isStatus={isStatus}
-      />
+      />}
     </>
   );
 }

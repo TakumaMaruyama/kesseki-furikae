@@ -8,3 +8,8 @@ vite.config.ts.*
 attached_assets
 .env
 .env.*
+
+# Local synthetic regression output
+.regression/
+test-results/
+playwright-report/

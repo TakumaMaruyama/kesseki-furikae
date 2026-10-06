@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import { Loader2, LogOutIcon, UserCheckIcon, UserPlusIcon, UserXIcon } from "luc
 import { AdminLoginForm } from "@/components/admin";
 import type { StaffRole } from "@/components/admin/types";
 import { apiRequest } from "@/lib/queryClient";
+import TransportPanel from "@/components/admin/TransportPanel";
 
 type CoachDailyAbsentee = {
   childName: string;
@@ -151,6 +152,7 @@ function StatusSection({
 
 export default function CoachPage() {
   const [, setLocation] = useLocation();
+  const showTransport = new URLSearchParams(useSearch()).get("tab") === "transport";
   const [authState, setAuthState] = useState<"loading" | "unauthenticated" | "authenticated">("loading");
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const dateString = format(selectedDate, "yyyy-MM-dd");
@@ -246,7 +248,12 @@ export default function CoachPage() {
         </div>
       </header>
 
-      <main className="container space-y-6 px-4 py-8 md:py-12">
+      <main className="container space-y-6 px-4 py-8 pb-24 md:py-12">
+        <nav className="flex gap-2" aria-label="スタッフ画面の切替">
+          <Button variant={showTransport ? "outline" : "default"} onClick={() => setLocation("/coach", { replace: true })}>欠席・振替</Button>
+          <Button variant={showTransport ? "default" : "outline"} onClick={() => setLocation("/coach?tab=transport", { replace: true })} data-testid="coach-transport">送迎連絡</Button>
+        </nav>
+        {showTransport ? <TransportPanel readOnly /> : <>
         <Card className="border-2">
           <CardHeader className="p-6 pb-4">
             <CardTitle className="text-xl">
@@ -318,6 +325,7 @@ export default function CoachPage() {
             />
           </div>
         )}
+        </>}
       </main>
     </div>
   );
