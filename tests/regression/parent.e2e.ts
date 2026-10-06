@@ -97,6 +97,35 @@ test("級を切り替えると前の級のレッスン枠が送信されない",
   expect(result.rows).toEqual([{ declared_class_band: "中級", original_slot_id: school.ids.sibling }]);
 });
 
+for (const entry of ["registration", "confirmation-code"] as const) test(`保護者の予約導線を維持する：${entry}`, async ({ page, school }) => {
+  let absenceId: string;
+  if (entry === "registration") {
+    await page.goto(school.baseURL);
+    await fillChild(page, school, 0, CHILD_A, "初級");
+    await page.getByTestId("button-submit-absence-batch").click();
+    await expect(page.getByTestId("text-confirm-code-0")).toBeVisible();
+    const saved = await school.pool.query("SELECT id FROM absences");
+    absenceId = saved.rows[0].id;
+    await page.getByTestId("button-close-confirm-dialog").click();
+  } else {
+    // The receipt already exists before this browser opens; no reissue or login.
+    const existing = await school.absence();
+    absenceId = existing.absenceId;
+    await page.goto(`${school.baseURL}/status`);
+    await page.getByTestId("input-confirm-code").fill(existing.confirmCode);
+    await page.getByTestId("button-search").click();
+    await page.getByTestId(`button-book-${absenceId}`).click();
+    await expect(page).toHaveURL(/\/absence\?token=/);
+  }
+  await page.getByRole("button", { name: "リスト", exact: true }).click();
+  const response = page.waitForResponse(res => res.url() === `${school.baseURL}/api/book` && res.request().method() === "POST");
+  await page.getByTestId(`button-book-${school.ids.available}`).click();
+  expect((await response).status()).toBe(200);
+  await expect(page.getByText("振替予約が成立しました。", { exact: true })).toBeVisible();
+  const requests = await school.pool.query("SELECT status FROM requests WHERE absence_id=$1", [absenceId]);
+  expect(requests.rows).toEqual([{ status: "確定" }]);
+});
+
 test("満席表示・振替予約・予約済み状態の再表示・取消", async ({ page, school }, info) => {
   const a = await school.absence();
   await page.goto(`${school.baseURL}/absence?token=${a.resumeToken}`);
