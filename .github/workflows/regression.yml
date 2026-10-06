@@ -16,14 +16,17 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-      - name: Verify the actual PR commit
+      # A legacy gitlink has no .gitmodules entry. Plain public Git checkout
+      # does not initialize it or persist credentials for submodule cleanup.
+      - name: Check out and verify the actual PR commit
         env:
           AUDIT_EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
-        run: test "$(git rev-parse HEAD)" = "$AUDIT_EXPECTED_SHA"
+        run: |
+          git init
+          git remote add origin https://github.com/TakumaMaruyama/kesseki-furikae.git
+          git -c submodule.recurse=false fetch --depth=1 origin "$AUDIT_EXPECTED_SHA"
+          git -c submodule.recurse=false checkout --detach "$AUDIT_EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$AUDIT_EXPECTED_SHA"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '24'
