@@ -14,6 +14,8 @@ import { ExpandableReason } from "@/components/ExpandableReason";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Loader2, UserX, UserCheck, UserIcon, PlusIcon, PencilIcon, TrashIcon, UsersIcon } from "lucide-react";
+import { formatJstDate } from "@shared/jst";
+import TransportPanel from "./TransportPanel";
 
 interface DailyStatusItem {
     childName: string;
@@ -191,13 +193,14 @@ function buildDefaultNewEnrolleePayload(defaultJoinedAtISO: string): NewEnrollee
 
 export function DailyStatusView() {
     const { toast } = useToast();
-    const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+    // Calendar uses local civil dates; initialize its displayed day from JST.
+    const [selectedDate, setSelectedDate] = useState<Date>(() => new Date(`${formatJstDate(new Date())}T00:00:00`));
     const [isTrialDialogOpen, setIsTrialDialogOpen] = useState(false);
     const [editingTrialParticipant, setEditingTrialParticipant] = useState<TrialParticipantItem | null>(null);
     const [trialPayload, setTrialPayload] = useState<TrialParticipantPayload>(() => buildDefaultTrialPayload());
     const [isNewEnrolleeDialogOpen, setIsNewEnrolleeDialogOpen] = useState(false);
     const [editingNewEnrollee, setEditingNewEnrollee] = useState<NewEnrolleeItem | null>(null);
-    const [newEnrolleePayload, setNewEnrolleePayload] = useState<NewEnrolleePayload>(() => buildDefaultNewEnrolleePayload(format(new Date(), "yyyy-MM-dd")));
+    const [newEnrolleePayload, setNewEnrolleePayload] = useState<NewEnrolleePayload>(() => buildDefaultNewEnrolleePayload(formatJstDate(new Date())));
     const [trialSearchQuery, setTrialSearchQuery] = useState("");
     const [hasTouchedTrialSelection, setHasTouchedTrialSelection] = useState(false);
 
@@ -450,9 +453,9 @@ export function DailyStatusView() {
         <div className="space-y-6">
             <Card className="border-2">
                 <CardHeader>
-                    <CardTitle className="text-xl">本日の欠席・遅刻・振替・体験者・新規入会者</CardTitle>
+                    <CardTitle className="text-xl">本日の欠席・遅刻・振替・体験者・新規入会者・送迎連絡</CardTitle>
                     <p className="text-sm text-muted-foreground">
-                        日付を選択して、その日の欠席者・遅刻者・振替者・体験者・新規入会者を確認できます。新規入会者は登録コースの曜日に、入会日以降4回分を自動表示します。
+                        日付を選択して、その日の欠席者・遅刻者・振替者・体験者・新規入会者・送迎不要連絡を確認できます。送迎不要連絡は欠席ではありません。新規入会者は登録コースの曜日に、入会日以降4回分を自動表示します。
                     </p>
                 </CardHeader>
                 <CardContent>
@@ -461,6 +464,7 @@ export function DailyStatusView() {
                             <Calendar
                                 mode="single"
                                 selected={selectedDate}
+                                defaultMonth={selectedDate}
                                 onSelect={(date) => date && setSelectedDate(date)}
                                 className="rounded-md border"
                                 locale={ja}
@@ -481,6 +485,8 @@ export function DailyStatusView() {
                                     </Button>
                                 </div>
                             </div>
+
+                            <TransportPanel selectedDate={dateStr} />
 
                             {!hasLessonOptions && (
                                 <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
