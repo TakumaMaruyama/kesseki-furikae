@@ -182,16 +182,31 @@ async function recoverReceipt(page: Page, receipt: string) {
   await page.getByLabel("本人用の受付控え", { exact: true }).fill(receipt);
   await page.getByRole("button", { name: "連絡を表示", exact: true }).click();
 }
-async function staffLogin(page: Page, school: SchoolFixture, coach = false) {
-  await page.goto(school.baseURL + (coach ? "/coach" : "/admin"));
+async function selectStaffDate(page: Page, date: string) {
+  const calendar = page.locator(".rdp");
+  const caption = (await calendar.innerText()).match(/(\d+)月\s*(\d{4})/)!;
+  const delta = Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7)) - (Number(caption[2]) * 12 + Number(caption[1]));
+  for (let i = 0; i < Math.abs(delta); i++) await calendar.locator("button:has(svg)").nth(delta > 0 ? 1 : 0).click();
+  await calendar.locator("button:not(.day-outside)").filter({ hasText: new RegExp(`^${Number(date.slice(-2))}$`) }).click();
+}
+
+async function expectSimpleTransport(page: Page) {
+  await expect(page.getByTestId("tab-transport")).toHaveCount(0);
+  await expect(page.getByTestId("coach-transport")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "この内容を確認済みにする" })).toHaveCount(0);
+  await expect(page.locator("body")).not.toContainText(/スタッフ確認済み|スタッフ未確認|未確認 \d+件/);
+}
+
+async function staffLogin(page: Page, school: SchoolFixture, coach = false, oldLink = false, keepInitialDate = false) {
+  await page.goto(school.baseURL + (coach ? "/coach" : "/admin") + (oldLink ? "?tab=transport" : ""));
   await page.getByTestId("input-staff-login-id").fill(coach ? "synthetic-coach" : "admin");
   await page.getByTestId("input-admin-password").fill(PASSWORD);
   await page.getByTestId("button-admin-login").click();
-  await page.getByTestId(coach ? "coach-transport" : "tab-transport").click();
-  await page.getByLabel("対象日（日本時間）").fill(school.dates.original);
+  if (!keepInitialDate) await selectStaffDate(page, school.dates.original);
+  await expectSimpleTransport(page);
 }
 
-test("送迎不要：保護者入力→自動受付控え→スタッフ確認→訂正→取消", async ({ page, browser, school }, info) => {
+test("送迎不要：保護者入力→自動受付控え→再表示→訂正→取消", async ({ page, browser, school }, info) => {
   const before = await attendanceSnapshot(school);
   await staffLogin(page, school);
   await expect(page.getByRole("button", { name: /コード.*発行/ })).toHaveCount(0);
@@ -237,21 +252,25 @@ test("送迎不要：保護者入力→自動受付控え→スタッフ確認�
     await page.getByRole("button", { name: "送迎連絡を更新", exact: true }).click();
     const card = page.getByTestId("staff-transport-" + profileId);
     await expect(card).toContainText("帰り不要");
-    await expect(card).toContainText("保護者入力");
+    await expect(card).not.toContainText("保護者入力");
     await expect(card).not.toContainText(/クラス帯|初級|中級|上級/);
     await expect(parent.locator("main")).not.toContainText(/クラス帯|初級|中級|上級/);
-    await card.getByRole("button", { name: "この内容を確認済みにする" }).click();
-    await expect(card).toContainText("スタッフ確認済み");
+    await expectSimpleTransport(page);
     await noHorizontalOverflow(page);
     await page.screenshot({ path: info.outputPath("transport-staff-confirmed.png"), fullPage: true, animations: "disabled" });
     await parent.reload();
     await recoverReceipt(parent, receipt);
-    await expect(parent.getByTestId("transport-saved")).toContainText("スタッフ確認済み");
+    // Wait for both the saved record and the form restored from it before editing.
+    await expect(parent.getByTestId("transport-saved")).toContainText("帰り不要");
+    await expect(parent.getByRole("radio", { name: "帰り不要（スクールから帰る便）", exact: true })).toBeChecked();
+    await expect(parent.getByLabel("補足（任意・300文字まで）")).toHaveValue("帰りは保護者が迎えに行きます");
+    await expectSimpleTransport(parent);
     await parent.getByRole("radio", { name: "往復不要（行き・帰りの両方）", exact: true }).check();
     await parent.getByRole("button", { name: "訂正内容を確認", exact: true }).click();
+    await expect(parent.getByTestId("transport-review")).toContainText("往復不要");
     await parent.getByRole("button", { name: "この内容で送信", exact: true }).click();
     await expect(parent.getByTestId("transport-saved")).toContainText("往復不要");
-    await expect(parent.getByTestId("transport-saved")).toContainText("スタッフ未確認");
+    await expectSimpleTransport(parent);
     parent.once("dialog", dialog => dialog.accept());
     await parent.getByRole("button", { name: "この日の連絡を取り消す", exact: true }).click();
     await expect(parent.getByTestId("transport-saved")).toContainText("取消済み");
@@ -360,35 +379,36 @@ test("送迎不要：級を選ばず同時刻のコースを区別し、候補1�
 test.describe("本日の状況の送迎連絡", () => {
   test.use({ timezoneId: "America/Los_Angeles" });
 
-  test("日本時間・日付連動・確認・訂正・取消・再取得を出席と分けて表示", async ({ page, school }, info) => {
+  test("日本時間・日付連動・訂正・取消・再取得を出席と分けて表示", async ({ page, school }, info) => {
     test.setTimeout(90_000);
     const before = await attendanceSnapshot(school);
     await page.clock.setFixedTime(new Date(`${school.dates.original}T01:00:00+09:00`));
-    const saved = await selfSubmission(school, { direction: "INBOUND", note: "合成補足：帰りは保護者が迎えます" });
-    expect(saved.status).toBe(200);
+    const saved = await selfSubmission(school, { direction: "INBOUND", note: "合成補足：帰りは保護者が迎えます" + "あ".repeat(200) });
+    expect(saved.status, saved.body.error).toBe(200);
     const profileId = saved.body.profile.id;
-    await staffLogin(page, school);
-    await page.getByTestId("tab-daily-status").click();
-    await expect(page.getByText(`対象日（日本時間）：${school.dates.original}`, { exact: true })).toBeVisible();
+    const admin = await school.api("/api/admin/login", { loginId: "admin", password: PASSWORD });
+    expect((await school.api(`/api/admin/transport/notices/${saved.body.notice.id}/acknowledge`, { version: 1 }, admin.cookie!)).status).toBe(200);
+    const history = (await school.pool.query("SELECT * FROM transport_notices")).rows;
+    await staffLogin(page, school, false, true, true);
+    await expect(page.getByTestId("tab-daily-status")).toHaveAttribute("data-state", "active");
+    await expect(page.locator(".rdp [aria-selected=true]")).toHaveText(String(Number(school.dates.original.slice(-2))));
     const card = page.getByTestId("staff-transport-" + profileId);
     await expect(card).toContainText(CHILD_A);
     await expect(card).toContainText("帰り不要");
     await expect(card).toContainText("合成補足：帰りは保護者が迎えます");
-    await expect(card).toContainText("スタッフ未確認");
-    await expect(card).toContainText("レッスンには出席予定です。");
+    await expectSimpleTransport(page);
+    await expect(card).not.toContainText(/レッスンには出席予定|保護者入力|更新：|のみ/);
+    await expect(card.getByRole("alert")).toHaveCount(0);
     await expect(page.getByText("欠席者はいません", { exact: true })).toBeVisible();
     await noHorizontalOverflow(page);
     await page.screenshot({ path: info.outputPath("daily-transport-active.png"), fullPage: true, animations: "disabled" });
-    await card.getByRole("button", { name: "この内容を確認済みにする" }).click();
-    await expect(card).toContainText("スタッフ確認済み");
+    expect((await school.pool.query("SELECT * FROM transport_notices")).rows).toEqual(history);
     expect((await school.api("/api/transport/notices", noticeInput(profileId, school.dates.original, { direction: "OUTBOUND", expectedVersion: 1 }), saved.cookie!)).status).toBe(200);
     // The real 30-second refresh must pick up a correction made elsewhere.
     await expect(card).toContainText("行き不要", { timeout: 35_000 });
-    await expect(card).toContainText("スタッフ未確認");
+    await expectSimpleTransport(page);
     expect((await school.api("/api/transport/notices", noticeInput(profileId, school.dates.original, { direction: "BOTH", expectedVersion: 2 }), saved.cookie!)).status).toBe(200);
-    await page.getByTestId("tab-transport").click();
-    await page.getByLabel("対象日（日本時間）").fill(school.dates.original);
-    await expect(card).toContainText("往復不要");
+    await page.getByTestId("tab-courses").click();
     await page.getByTestId("tab-daily-status").click();
     await expect(card).toContainText("往復不要");
     const day = Number(school.dates.original.slice(-2));
@@ -401,8 +421,8 @@ test.describe("本日の状況の送迎連絡", () => {
     expect((await school.api("/api/transport/notices", noticeInput(profileId, school.dates.original, { direction: "BOTH", status: "CANCELLED", expectedVersion: 3 }), saved.cookie!)).status).toBe(200);
     await page.getByRole("button", { name: "送迎連絡を更新", exact: true }).click();
     await expect(card).toContainText("取消済み");
-    await expect(card).toContainText("往復不要の連絡を取り消しました。");
-    await expect(card).toContainText("スタッフ未確認");
+    await expect(card).toContainText("取消済み（往復不要）");
+    await expectSimpleTransport(page);
     await noHorizontalOverflow(page);
     await page.screenshot({ path: info.outputPath("daily-transport-cancelled.png"), fullPage: true, animations: "disabled" });
     expect(await attendanceSnapshot(school)).toEqual(before);
@@ -416,7 +436,7 @@ test.describe("本日の状況の送迎連絡", () => {
     await page.route("**/api/admin/transport/notices?*", route => fail
       ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "合成読込失敗" }) })
       : route.continue());
-    await page.getByTestId("tab-daily-status").click();
+    await page.getByRole("button", { name: "送迎連絡を更新", exact: true }).click();
     await expect(page.getByRole("alert").filter({ hasText: "送迎連絡を読み込めませんでした" })).toBeVisible();
     await expect(page.getByText("この日の連絡はありません。", { exact: true })).toHaveCount(0);
     await expect(page.getByText("未確認 0件", { exact: true })).toHaveCount(0);
@@ -426,5 +446,34 @@ test.describe("本日の状況の送迎連絡", () => {
     await page.getByRole("button", { name: "送迎連絡を更新", exact: true }).click();
     await expect(page.getByText("この日の連絡はありません。", { exact: true })).toBeVisible();
     await expect(page.getByRole("alert").filter({ hasText: "送迎連絡を読み込めませんでした" })).toHaveCount(0);
+  });
+
+  test("コーチも日本時間の選択日で参照し必要な出席警告を表示", async ({ page, school }, info) => {
+    await school.absence();
+    const saved = await selfSubmission(school);
+    expect(saved.status, saved.body.error).toBe(200);
+    const before = await attendanceSnapshot(school);
+    const history = (await school.pool.query("SELECT * FROM transport_notices")).rows;
+    const acknowledgements: string[] = [];
+    page.on("request", request => { if (request.url().includes("/acknowledge")) acknowledgements.push(request.url()); });
+    await page.clock.setFixedTime(new Date(`${school.dates.original}T01:00:00+09:00`));
+    await staffLogin(page, school, true, true, true);
+    await expect(page.locator(".rdp [aria-selected=true]")).toHaveText(String(Number(school.dates.original.slice(-2))));
+    const card = page.getByTestId("staff-transport-" + saved.body.profile.id);
+    await expect(card.getByRole("alert")).toContainText("同名の欠席連絡があります。");
+    await expect(card).not.toContainText("保護者入力の連絡です。");
+    await noHorizontalOverflow(page);
+    await page.screenshot({ path: info.outputPath("coach-transport-warning.png"), fullPage: true, animations: "disabled" });
+    const day = Number(school.dates.original.slice(-2));
+    const emptyDate = school.dates.original.slice(0, -2) + String(day === 1 ? 2 : day - 1).padStart(2, "0");
+    await selectStaffDate(page, emptyDate);
+    await expect(page.getByText("この日の連絡はありません。", { exact: true })).toBeVisible();
+    await expect(card).toHaveCount(0);
+    await selectStaffDate(page, school.dates.original);
+    await expect(card).toContainText("行き不要");
+    expect(acknowledgements).toEqual([]);
+    expect((await school.pool.query("SELECT * FROM transport_notices")).rows).toEqual(history);
+    expect(await attendanceSnapshot(school)).toEqual(before);
+    expect(await school.deliveries()).toEqual([]);
   });
 });

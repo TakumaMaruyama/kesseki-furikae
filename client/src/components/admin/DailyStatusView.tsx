@@ -453,9 +453,9 @@ export function DailyStatusView() {
         <div className="space-y-6">
             <Card className="border-2">
                 <CardHeader>
-                    <CardTitle className="text-xl">本日の欠席・遅刻・振替・体験者・新規入会者・送迎連絡</CardTitle>
+                    <CardTitle className="text-xl">本日の状況</CardTitle>
                     <p className="text-sm text-muted-foreground">
-                        日付を選択して、その日の欠席者・遅刻者・振替者・体験者・新規入会者・送迎不要連絡を確認できます。送迎不要連絡は欠席ではありません。新規入会者は登録コースの曜日に、入会日以降4回分を自動表示します。
+                        日付を選択して、その日の状況を確認できます。新規入会者は登録コースの曜日に、入会日以降4回分を自動表示します。
                     </p>
                 </CardHeader>
                 <CardContent>
@@ -474,7 +474,7 @@ export function DailyStatusView() {
                         <div className="lg:col-span-2 space-y-6">
                             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                                 <h3 className="text-lg font-bold">
-                                    {format(selectedDate, "yyyy年M月d日(E)", { locale: ja })}
+                                    {format(selectedDate, "yyyy年M月d日(E)", { locale: ja })}（日本時間）
                                 </h3>
                                 <div className="flex flex-wrap gap-2">
                                     <Button type="button" size="sm" onClick={openCreateTrialDialog} disabled={!hasLessonOptions || isSavingTrialParticipant}>

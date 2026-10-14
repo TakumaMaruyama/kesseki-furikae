@@ -42,6 +42,7 @@ export async function createSchoolFixture(ui = false) {
   const embedded = new EmbeddedPostgres({
     databaseDir: dataDir, port, user: "postgres", password,
     authMethod: "scram-sha-256", persistent: false, createPostgresUser: false,
+    initdbFlags: ["--encoding=UTF8"],
     postgresFlags: ["-h", "127.0.0.1", "-c", "unix_socket_directories=", "-c", "timezone=UTC"],
     onLog() {}, onError(error) { console.error(error); },
   });
@@ -77,7 +78,8 @@ export async function createSchoolFixture(ui = false) {
     await embedded.initialise();
     await embedded.start();
     pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
-    const owned = await pool.query("SELECT current_database() AS db, current_setting('data_directory') AS dir, host(inet_server_addr()) AS host, inet_server_port() AS port");
+    const owned = await pool.query("SELECT current_setting('server_encoding') AS encoding, current_database() AS db, current_setting('data_directory') AS dir, host(inet_server_addr()) AS host, inet_server_port() AS port");
+    assert.equal(owned.rows[0].encoding, "UTF8");
     assert.equal(owned.rows[0].db, "postgres");
     assert.equal(await realpath(owned.rows[0].dir), await realpath(dataDir));
     assert.equal(owned.rows[0].host, "127.0.0.1");

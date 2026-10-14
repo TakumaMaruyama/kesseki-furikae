@@ -155,7 +155,6 @@ export default function TransportPage() {
         {saved && <div className="rounded-lg border p-4 space-y-2" data-testid="transport-saved">
           <p className="font-semibold">{saved.serviceDate} のみ · {directionLabels[saved.direction]}</p>
           <p>{saved.status === "CANCELLED" ? "取消済み（送迎不要の連絡を取り消しました）" : "送迎不要の連絡を受付済み"}</p>
-          <p>{saved.acknowledgedVersion === saved.version ? "スタッフ確認済み" : "スタッフ未確認"}</p>
           {saved.note && <p className="whitespace-pre-wrap break-words">補足：{saved.note}</p>}
           {saved.status === "ACTIVE" && <Button variant="outline" disabled={busy || !day.data?.editable} onClick={() => {
             if (window.confirm("この日の送迎不要連絡を取り消しますか？出席予定は変わりません。")) save.mutate("CANCELLED");
