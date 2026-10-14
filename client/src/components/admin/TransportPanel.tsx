@@ -1,45 +1,40 @@
-import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import { formatJstDate } from "@shared/jst";
+import { apiRequest } from "@/lib/queryClient";
 import { directionLabels, type StaffTransportNotice } from "@shared/transport";
 
-export default function TransportPanel({ readOnly = false, selectedDate }: { readOnly?: boolean; selectedDate?: string }) {
-  const [ownDate, setDate] = useState(() => formatJstDate(new Date()));
-  const date = selectedDate ?? ownDate;
+export default function TransportPanel({ readOnly = false, selectedDate }: { readOnly?: boolean; selectedDate: string }) {
   const noticesEndpoint = readOnly ? "/api/staff/transport/notices" : "/api/admin/transport/notices";
-  const notices = useQuery<StaffTransportNotice[]>({ queryKey: [noticesEndpoint, date],
-    queryFn: () => apiRequest("GET", `${noticesEndpoint}?date=${date}`), enabled: !!date, staleTime: 0, refetchOnMount: "always", refetchInterval: 30_000, retry: false });
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["/api/admin/transport/notices"] });
-  const acknowledge = useMutation({ mutationFn: (notice: StaffTransportNotice) => apiRequest("POST", `/api/admin/transport/notices/${notice.id}/acknowledge`, { version: notice.version }), onSuccess: refresh });
-  const errors = [notices.error, ...(!readOnly ? [acknowledge.error] : [])].filter(Boolean);
-  return <div className="space-y-6">
-    <Card><CardHeader><CardTitle>その日だけの送迎不要連絡</CardTitle><p className="text-sm text-muted-foreground">保護者がお名前とレッスンを入力して連絡します。スクールでのコード発行は不要です。訂正・取消後は、もう一度内容を確認してください。</p></CardHeader>
-      <CardContent className="space-y-4">
-        <a href="/transport" className="inline-block text-sm text-primary underline">保護者の送迎連絡画面を開く</a>
-        <div className="flex flex-wrap items-end gap-3">{selectedDate !== undefined ? <p className="text-sm font-semibold">対象日（日本時間）：{date}</p> : <div><Label htmlFor="staff-transport-date">対象日（日本時間）</Label><Input id="staff-transport-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} /></div>}
-          <Button variant="outline" onClick={() => notices.refetch()}>送迎連絡を更新</Button>
-          {!notices.isError && notices.data && <Badge variant="secondary">未確認 {notices.data.filter((item) => item.acknowledgedVersion !== item.version).length}件</Badge>}</div>
-        <p className="text-sm">選択日の連絡のみ表示しています（30秒ごとに更新）。「帰り不要」でも行きは利用します。</p>
-        {notices.isLoading && <p role="status">読み込み中…</p>}
-        {notices.isError && <p role="alert" className="text-destructive">送迎連絡を読み込めませんでした。表示中の内容は最新とは限りません。「送迎連絡を更新」で再試行してください。</p>}
-        {!notices.isError && notices.data?.length === 0 && <p>この日の連絡はありません。</p>}
-        {(notices.data || []).map((item) => <article key={item.id} className="rounded-lg border p-4 space-y-2" data-testid={`staff-transport-${item.profileId}`}>
-          <div className="flex flex-wrap justify-between gap-2"><h3 className="font-bold">{item.childName}</h3><Badge variant={item.status === "CANCELLED" ? "outline" : "default"}>{item.status === "CANCELLED" ? "取消済み" : directionLabels[item.direction]}</Badge></div>
-          <p>{item.serviceDate} のみ {item.lessonTime && `· レッスン ${item.lessonTime}`} {item.lessonLabel}</p>
-          <p className="text-sm">{item.selfSubmitted && "保護者入力 · "}{item.status === "CANCELLED" ? `${directionLabels[item.direction]}の連絡を取り消しました。通常の送迎予定を確認してください。` : "レッスンには出席予定です。"}</p>
-          {item.attendanceWarning && <p className="text-destructive font-semibold" role="alert">出席予定の再確認が必要：{item.attendanceWarning}</p>}
-          {item.note && <p className="whitespace-pre-wrap break-words">補足：{item.note}</p>}
-          <p className="text-xs text-muted-foreground">更新：{new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", dateStyle: "short", timeStyle: "short" }).format(new Date(item.updatedAt))}（日本時間）</p>
-          {item.acknowledgedVersion === item.version ? <p className="text-sm font-semibold">スタッフ確認済み</p> : <div className="space-y-2"><p className="text-sm font-semibold">スタッフ未確認{readOnly && "（管理者が確認を記録します）"}</p>{!readOnly && <Button disabled={acknowledge.isPending} onClick={() => acknowledge.mutate(item)}>この内容を確認済みにする</Button>}</div>}
-        </article>)}
-      </CardContent>
-    </Card>
-    {errors.map((error, index) => <p key={index} role="alert" className="text-destructive">{error!.message}</p>)}
-  </div>;
+  const notices = useQuery<StaffTransportNotice[]>({ queryKey: [noticesEndpoint, selectedDate],
+    queryFn: () => apiRequest("GET", `${noticesEndpoint}?date=${selectedDate}`), enabled: !!selectedDate,
+    staleTime: 0, refetchOnMount: "always", refetchInterval: 30_000, retry: false });
+  return <Card className="border-amber-300/70">
+    <CardHeader className="pb-3 flex-row items-center justify-between gap-2 space-y-0">
+      <CardTitle className="text-base text-amber-800">送迎不要</CardTitle>
+      <Button size="sm" variant="outline" aria-label="送迎連絡を更新" onClick={() => notices.refetch()}>更新</Button>
+    </CardHeader>
+    <CardContent>
+      {notices.isLoading && <p role="status" className="text-sm text-muted-foreground">読み込み中…</p>}
+      {notices.isError && <p role="alert" className="text-sm text-destructive">送迎連絡を読み込めませんでした。{notices.data?.length ? "表示は前回取得時の内容です。" : ""}「更新」で再試行してください。</p>}
+      {!notices.isError && notices.data?.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">この日の連絡はありません。</p>}
+      <div className="space-y-2">
+        {(notices.data || []).map((item) => {
+          // Keep actual attendance/duplicate warnings; omit the notice common to every self-submission.
+          const warning = item.attendanceWarning?.replace("保護者入力の連絡です。送迎名簿・出席予定を確認してください。", "").trim();
+          const cancelled = item.status === "CANCELLED";
+          return <article key={item.id} className={`rounded-lg border p-3 space-y-1 ${cancelled ? "bg-muted/40" : "bg-amber-50/60"}`} data-testid={`staff-transport-${item.profileId}`}>
+            <div className="flex flex-wrap justify-between items-start gap-2">
+              <h3 className="font-semibold break-words min-w-0">{item.childName}</h3>
+              <Badge variant={cancelled ? "outline" : "secondary"}>{cancelled ? `取消済み（${directionLabels[item.direction]}）` : directionLabels[item.direction]}</Badge>
+            </div>
+            <p className="text-sm text-muted-foreground break-words">{item.lessonTime} {item.lessonLabel}</p>
+            {warning && <p className="text-sm text-destructive font-semibold break-words" role="alert">{warning}</p>}
+            {item.note && <p className="text-sm whitespace-pre-wrap break-words">{item.note}</p>}
+          </article>;
+        })}
+      </div>
+    </CardContent>
+  </Card>;
 }

@@ -27,8 +27,6 @@ import {
   CoachAccountSettings,
 } from "@/components/admin";
 import type { StaffRole } from "@/components/admin/types";
-import TransportPanel from "@/components/admin/TransportPanel";
-import type { StaffTransportNotice } from "@shared/transport";
 
 const CLASS_BAND_ORDER: Record<string, number> = {
   初級: 0,
@@ -91,7 +89,7 @@ export default function AdminPage() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const requestedTab = new URLSearchParams(useSearch()).get("tab");
-  const activeTab = requestedTab && ["daily-status", "slots", "courses", "history", "transport"].includes(requestedTab) ? requestedTab : "daily-status";
+  const activeTab = requestedTab && ["daily-status", "slots", "courses", "history"].includes(requestedTab) ? requestedTab : "daily-status";
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [editingSlots, setEditingSlots] = useState<Set<string>>(new Set());
   const [capacityValues, setCapacityValues] = useState<Record<string, any>>({});
@@ -145,14 +143,6 @@ export default function AdminPage() {
     queryKey: ["/api/admin/closure-events"],
     enabled: isAuthenticated === true,
   });
-
-  const transportToday = formatJstDate(new Date());
-  const { data: todayTransport } = useQuery<StaffTransportNotice[]>({
-    queryKey: ["/api/admin/transport/notices", transportToday],
-    queryFn: () => apiRequest("GET", `/api/admin/transport/notices?date=${transportToday}`),
-    enabled: isAuthenticated === true, refetchInterval: 30_000,
-  });
-  const unreadTransport = todayTransport?.filter((notice) => notice.acknowledgedVersion !== notice.version).length || 0;
 
   const updateCapacityMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/admin/update-slot-capacity", data),
@@ -598,7 +588,7 @@ export default function AdminPage() {
         </div>
 
         <Tabs value={activeTab} onValueChange={(tab) => setLocation(`/admin?tab=${tab}`, { replace: true })} className="w-full">
-          <TabsList className="grid w-full max-w-5xl grid-cols-2 sm:grid-cols-5 h-auto gap-1">
+          <TabsList className="grid w-full max-w-5xl grid-cols-2 sm:grid-cols-4 h-auto gap-1">
             <TabsTrigger value="daily-status" data-testid="tab-daily-status" className="text-base">
               本日の状況
             </TabsTrigger>
@@ -611,10 +601,8 @@ export default function AdminPage() {
             <TabsTrigger value="history" data-testid="tab-history" className="text-base">
               履歴
             </TabsTrigger>
-            <TabsTrigger value="transport" data-testid="tab-transport" className="text-base">送迎連絡{unreadTransport > 0 && <span className="ml-1 rounded bg-primary px-1.5 text-xs text-primary-foreground" aria-label={`本日未確認${unreadTransport}件`}>{unreadTransport}</span>}</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="transport" className="mt-6"><TransportPanel /></TabsContent>
 
           <TabsContent value="daily-status" className="mt-6">
             <DailyStatusView />
