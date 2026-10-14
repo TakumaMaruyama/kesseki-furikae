@@ -260,9 +260,14 @@ test("送迎不要：保護者入力→自動受付控え→再表示→訂正�
     await page.screenshot({ path: info.outputPath("transport-staff-confirmed.png"), fullPage: true, animations: "disabled" });
     await parent.reload();
     await recoverReceipt(parent, receipt);
+    // Wait for both the saved record and the form restored from it before editing.
+    await expect(parent.getByTestId("transport-saved")).toContainText("帰り不要");
+    await expect(parent.getByRole("radio", { name: "帰り不要（スクールから帰る便）", exact: true })).toBeChecked();
+    await expect(parent.getByLabel("補足（任意・300文字まで）")).toHaveValue("帰りは保護者が迎えに行きます");
     await expectSimpleTransport(parent);
     await parent.getByRole("radio", { name: "往復不要（行き・帰りの両方）", exact: true }).check();
     await parent.getByRole("button", { name: "訂正内容を確認", exact: true }).click();
+    await expect(parent.getByTestId("transport-review")).toContainText("往復不要");
     await parent.getByRole("button", { name: "この内容で送信", exact: true }).click();
     await expect(parent.getByTestId("transport-saved")).toContainText("往復不要");
     await expectSimpleTransport(parent);
